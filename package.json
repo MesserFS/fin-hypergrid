@@ -1,6 +1,6 @@
 {
-  "name": "fin-hypergrid",
-  "version": "0.3.0",
+  "name": "gekko_dashboard",
+  "version": "0.0.0",
   "description": "Virtual spreadsheet",
   "directories": {
     "test": "test"
@@ -19,12 +19,14 @@
   },
   "devDependencies": {
     "browser-sync": "^2.10.0",
+    "gulp-chmod": "^1.3.0",
     "css-injector": "^1.1.0",
-    "gulp": "^3.9.0",
+    "glob": "^7.0.3",
+    "gulp": "^3.9.1",
     "gulp-beautify": "^2.0.0",
     "gulp-browserify": "^0.5.1",
     "gulp-concat": "^2.6.0",
-    "gulp-eslint": "^1.1.0",
+    "gulp-eslint": "^3.0.0",
     "gulp-exclude-gitignore": "^1.0.0",
     "gulp-footer": "^1.0.5",
     "gulp-header": "^1.7.1",
@@ -35,23 +37,14 @@
     "gulp-rename": "^1.2.2",
     "gulp-uglify": "^1.5.1",
     "gulp-util": "^3.0.7",
+    "gulp-sass": "^2.2.0",
+    "gulp-using": "^0.1.0",
     "gutil": "^1.6.4",
+    "merge-stream": "^1.0.0",
     "multipipe": "^0.2.1",
     "multiple": "^0.2.1",
     "mustache": "^2.2.0",
     "run-sequence": "^1.1.4",
     "through2": "^2.0.0"
-  },
-  "scripts": {
-    "test": "gulp test"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/openfin/fin-hypergrid.git"
-  },
-  "author": "SWirts, JEiten",
-  "license": "MIT",
-  "readmeFilename": "README.md",
-  "gitHead": "",
-  "keywords": []
+  }
 }
