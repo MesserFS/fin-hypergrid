@@ -1,18 +1,12 @@
 'use strict';
 
-var Simple = require('./Simple');
+var CellEditor = require('./CellEditor');
 
 /**
  * @constructor
+ * @extends CellEditor
  */
-var Combo = Simple.extend('Combo', {
-
-    /**
-     * my lookup alias
-     * @type {string}
-     * @memberOf Combo.prototype
-     */
-    alias: 'combo',
+var Combo = CellEditor.extend('Combo', {
 
     /**
      * the list of items to pick from
@@ -37,7 +31,8 @@ var Combo = Simple.extend('Combo', {
      * @memberOf Combo.prototype
      */
     selectAll: function() {
-        this.input.setSelectionRange(0, this.input.value.length);
+        var lastCharPlusOne = this.getEditorValue().length;
+        this.input.setSelectionRange(0, lastCharPlusOne);
     }
 
 });

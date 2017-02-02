@@ -2,53 +2,53 @@
 
 'use strict';
 
-var Simple = require('./Simple');
-var Formatters = require('../lib/Formatters');
+var CellEditor = require('./CellEditor');
 
-function parseDate(input) {
-    var parts = input.match(/(\d+)/g);
-    // new Date(year, month [, date [, hours[, minutes[, seconds[, ms]]]]])
-    // return new window.Date(parts[0], parts[1] - 1, parts[2]); // months are 0-based
-    // [MFS] Use UTC
-    return new window.Date(`${input}T00:00:00Z`);  
-}
+var isChromium = window.chrome,
+    winNav = window.navigator,
+    vendorName = winNav.vendor,
+    isOpera = winNav.userAgent.indexOf('OPR') > -1,
+    isIEedge = winNav.userAgent.indexOf('Edge') > -1,
+    isIOSChrome = winNav.userAgent.match('CriOS'),
+    isChrome = !isIOSChrome &&
+        isChromium !== null &&
+        isChromium !== undefined &&
+        vendorName === 'Google Inc.' &&
+        isOpera == false && isIEedge == false; // eslint-disable-line eqeqeq
 
 /**
+ * As of spring 2016:
+ * Functions well in Chrome except no localization (day, month names; date format).
+ * Unimplemented in Safari, Firefox, Internet Explorer.
+ * This is a "snmart" control. It detects Chrome:
+ * * If Chrome, uses chromeDate overrides format to that required by the value attribute, yyyy-mm-dd. (Note that this is not the format displayed in the control, which is always mm/dd/yyyy.)
+ * * Otherwise uses localized date format _but_ falls back to a regular text box.
  * @constructor
+ * @extends CellEditor
  */
-var Date = Simple.extend('Date', {
+var Date = CellEditor.extend('Date', {
 
-    /**
-     * my lookup alias
-     * @type {string}
-     * @memberOf Date.prototype
-     */
-    alias: 'date',
+    initialize: function(grid) {
 
-    template: function() {
-        /*
-            <input id="editor" type="date">
-        */
-    },
+        var localizerName,
+            usesDateInputControl = isChrome;
 
-    setEditorValue: function(value) {
-        if (value != null && value.constructor.name === 'Date') {
-            value = Formatters.date(value);
-        }
-        this.getInput().value = value + '';
-    },
+        if (usesDateInputControl) {
+            localizerName = 'chromeDate';
+            this.template = '<input type="date">';
+        } else {
+            localizerName = 'date';
+            this.template = '<input type="text" lang="{{locale}}">';
 
-    getEditorValue: function() {
-        var value = this.getInput().value;
-        // [MFS]
-        if (value === "") {
-            return "";
+            this.selectAll = function() {
+                var lastCharPlusOne = this.getEditorValue().length;
+                this.input.setSelectionRange(0, lastCharPlusOne);
+            };
         }
 
-        value = parseDate(value);
-        return value;
-    },
-
+        this.localizer = grid.localization.get(localizerName);
+    }
 });
+
 
 module.exports = Date;

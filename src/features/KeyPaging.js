@@ -1,6 +1,6 @@
 'use strict';
 
-var Feature = require('./Feature.js');
+var Feature = require('./Feature');
 
 var commands = {
     PAGEDOWN: function(grid) { grid.pageDown(); },
@@ -14,17 +14,13 @@ var commands = {
  */
 var KeyPaging = Feature.extend('KeyPaging', {
 
-    alias: 'KeyPaging',
-
     /**
-     * @desc Handle this event down the feature chain of responsibility.
      * @param {Hypergrid} grid
      * @param {Object} event - the event details
      * @memberOf KeyPaging.prototype
      */
     handleKeyDown: function(grid, event) {
-        var detail = event.detail.char;
-        var func = commands[detail];
+        var func = commands[event.detail.char];
         if (func) {
             func(grid);
         } else if (this.next) {

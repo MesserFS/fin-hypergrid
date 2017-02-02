@@ -13,6 +13,14 @@ function SelectionModel(grid) {
     this.grid = grid;
 
     /**
+     * @name multipleSelections
+     * @type {boolean}
+     * @summary Can select multiple cell regions.
+     * @memberOf SelectionModel.prototype
+     */
+    this.multipleSelections = grid[grid.behavior ? 'getProperties' : '_getProperties']().multipleSelections;
+
+    /**
      * @name selections
      * @type {Rectangle[]}
      * @summary The selection rectangles.
@@ -104,14 +112,34 @@ SelectionModel.prototype = {
      * @param {number} oy - origin y coordinate
      * @param {number} ex - extent x coordinate
      * @param {number} ey - extent y coordinate
+     * @param {boolean} silent - whether to fire selection changed event
      */
-    select: function(ox, oy, ex, ey) {
+    select: function(ox, oy, ex, ey, silent) {
         var newSelection = this.grid.newRectangle(ox, oy, ex, ey);
-        this.selections.push(newSelection);
-        this.flattenedX.push(newSelection.flattenXAt(0));
-        this.flattenedY.push(newSelection.flattenYAt(0));
+
+        //Cache the first selected cell before it gets normalized to top-left origin
+        newSelection.firstSelectedCell = this.grid.newPoint(ox, oy);
+
+        newSelection.lastSelectedCell = (
+            newSelection.firstSelectedCell.x === newSelection.origin.x &&
+            newSelection.firstSelectedCell.y === newSelection.origin.y
+        )
+            ? newSelection.corner
+            : newSelection.origin;
+
+        if (this.multipleSelections) {
+            this.selections.push(newSelection);
+            this.flattenedX.push(newSelection.flattenXAt(0));
+            this.flattenedY.push(newSelection.flattenYAt(0));
+        } else {
+            this.selections[0] = newSelection;
+            this.flattenedX[0] = newSelection.flattenXAt(0);
+            this.flattenedY[0] = newSelection.flattenYAt(0);
+        }
         this.setLastSelectionType('cell');
-        this.grid.selectionChanged();
+
+        if (!silent) {
+            this.grid.selectionChanged();
         // [MFS]
         this.fire('selectionUpdated', this.selections);
     },
@@ -385,6 +413,12 @@ SelectionModel.prototype = {
      * @param y2
      */
     deselectRow: function(y1, y2) {
+        if (this.areAllRowsSelected()) {
+            // To deselect a row, we must first remove the all rows flag...
+            this.setAllRowsSelected(false);
+            // ...and create a single range representing all rows
+            this.rowSelectionModel.select(0, this.grid.getRowCount() - 1);
+        }
         this.rowSelectionModel.deselect(y1, y2);
         this.setLastSelectionType('row');
     },

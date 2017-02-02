@@ -2,8 +2,9 @@
 
 module.exports = {
     DataModel: require('./DataModel'), // abstract base class
-    Default: require('./Default'),
-    InMemory: require('./InMemory'),
     JSON: require('./JSON'),
+    HeaderSubgrid: require('./HeaderSubgrid'),
+    FilterSubgrid: require('./FilterSubgrid'),
+    SummarySubgrid: require('./SummarySubgrid'),
     MFS: require('./mfs')
 };

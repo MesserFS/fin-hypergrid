@@ -4,59 +4,126 @@
 
 const gulp = require('gulp'),
     chmod = require('gulp-chmod'),
-    $$ = require('gulp-load-plugins')(),
+    $$          = require('gulp-load-plugins')(),
     runSequence = require('run-sequence'),
     browserSync = require('browser-sync').create(),
-    exec = require('child_process').exec,
-    path = require('path'),
-    pipe = require('multipipe');
-    
+    exec        = require('child_process').exec,
+    path        = require('path'),
+    pipe        = require('multipipe');
 
-const sass = require('gulp-sass'),
-    using = require('gulp-using'),
-    glob = require("glob"),
-    merge = require("merge-stream"),
+
+const sass   = require('gulp-sass'),
+    using    = require('gulp-using'),
+    glob     = require("glob"),
+    merge    = require("merge-stream"),
     through2 = require("through2");
 
 const finHypergridCurrDir = './Scripts/src/fin-hypergrid/2.0/',
-    finHypergridSrcDir = finHypergridCurrDir + '/src/',
-    finHypergridJsFiles = finHypergridCurrDir + '**/*.js',
-    finHypergridBuildDir = './Scripts/core/DataView/fin-hypergrid/2.0/';
+    finHypergridSrcDir    = finHypergridCurrDir + '/src/',
+    finHypergridJsFiles   = finHypergridCurrDir + '**/*.js',
+    finHypergridBuildDir  = './Scripts/core/DataView/fin-hypergrid/2.0/';
 
 const mfsHypergridCurrDir = './Scripts/src/mfs-hypergrid/2.0/',
-    mfsHypergridSrcDir = mfsHypergridCurrDir + '/src/',
-    mfsHypergridJsFiles = mfsHypergridCurrDir + '**/*.js',
-    mfsHypergridBuildDir = './Scripts/core/DataView/fin-hypergrid/2.0/';
+    mfsHypergridSrcDir    = mfsHypergridCurrDir + '/src/',
+    mfsHypergridJsFiles   = mfsHypergridCurrDir + '**/*.js',
+    mfsHypergridBuildDir  = './Scripts/core/DataView/fin-hypergrid/2.0/';
 
+
+const name      = 'fin-hypergrid',
+    srcDir      = './src/',
+    testDir     = './test/',
+    jsFiles     = '**/*.js',
+    addOnsDir   = './add-ons/',
+    demoDir     = './demo/',
+    buildDir    = demoDir + 'build/';
 //  //  //  //  //  //  //  //  //  //  //  //
 gulp.task('unlock', unlock);
 
 gulp.task('lint', lint);
+gulp.task('test', test);
 gulp.task('doc', doc);
 gulp.task('beautify', beautify);
 gulp.task('images', swallowImages);
-gulp.task('browserify', browserify);
+gulp.task('browserify', browserify.bind(null,
+    name,
+    srcDir,
+    buildDir
+));
+gulp.task('browserify-hyperfilter', browserify.bind(null,
+    'hyper-filter',
+    addOnsDir + 'hyper-filter/',
+    buildDir + addOnsDir,
+    /\w+\.exports(\s*=)/,
+    'window.fin.Hypergrid.Hyperfilter$1'
+));
+gulp.task('browserify-hypersorter', browserify.bind(null,
+    'hyper-sorter',
+    addOnsDir + 'hyper-sorter/',
+    buildDir + addOnsDir,
+    /\w+\.exports(\s*=)/,
+    'window.fin.Hypergrid.Hypersorter$1'
+));
+gulp.task('browserify-totals-toolkit', browserify.bind(null,
+    'totals-toolkit',
+    addOnsDir + 'totals-toolkit/',
+    buildDir + addOnsDir,
+    /\w+\.exports(\s*=)/,
+    'window.fin.Hypergrid.totalsToolkit$1'
+));
 gulp.task('reloadBrowsers', reloadBrowsers);
 gulp.task('serve', browserSyncLaunchServer);
 
 gulp.task('sass', sass_task);
+gulp.task('html-templates', function() {
+    return templates('html');
+});
 
-gulp.task('build', function (callback) {
+gulp.task('css-templates', function() {
+    return templates('css');
+});
+
+gulp.task('build', function(callback) {
     clearBashScreen();
     runSequence(
         'lint',
         'unlock',
         'images',
+        'html-templates',
+        'css-templates',
+        'test',
+        'add-ons',
         'sass',
-        'browserify'
+        'browserify-hyperfilter',
+        'browserify-hypersorter',
+        'browserify-totals-toolkit',
+        //'beautify',
+        'browserify',
+        //'doc',
+        callback
     );
 });
 
 gulp.task('watch', function () {
-    gulp.watch([finHypergridSrcDir + '**', testDir + '**'], ['build']);
-    //.on('change', function(event) {
-    //    browserSync.reload();
-    //});
+    gulp.watch([
+        addOnsDir + jsFiles,
+        srcDir + '**',
+        '!' + srcDir + 'jsdoc/**',
+        './css/*.css',
+        './html/*.html',
+        demoDir + 'js/*.js',
+        testDir + '**',
+        //'../../filter-tree/src/**' // comment off this line and the one below when filter tree on npm
+    ], [
+        'build'
+    ]);
+
+    gulp.watch([
+        demoDir + '*.html',
+        demoDir + 'css/demo.css',
+        buildDir + '*'
+    ], [
+        'reloadBrowsers'
+    ]);
 });
 
 gulp.task('default', ['build'], browserSyncLaunchServer);
@@ -64,7 +131,16 @@ gulp.task('default', ['build'], browserSyncLaunchServer);
 //  //  //  //  //  //  //  //  //  //  //  //
 
 function lint() {
-    return gulp.src([finHypergridJsFiles, mfsHypergridJsFiles, '!' + finHypergridSrcDir + '**/old/**/'])
+    return gulp.src([
+        finHypergridJsFiles,
+        mfsHypergridJsFiles,
+        '!' + finHypergridSrcDir + '**/old/**/',
+        addOnsDir + jsFiles,
+        srcDir + jsFiles,
+        demoDir + 'js/*.js',
+        testDir + jsFiles,
+        //'../../filter-tree/src/' + jsFiles // comment off this line and the one above when filter tree on npm])
+        .pipe($$.excludeGitignore())
         .pipe($$.eslint()) // specify version in .eslintrc.json
         .pipe($$.eslint.format())
         .pipe($$.eslint.failAfterError());
@@ -73,6 +149,10 @@ function lint() {
 function unlock() {
     require("child_process").exec("attrib -R " + finHypergridCurrDir + 'images/images.js');
     require("child_process").exec("attrib -R " + finHypergridBuildDir + "*.js /s");
+
+function test(cb) {
+    return gulp.src(testDir + jsFiles)
+        .pipe($$.mocha({reporter: 'spec'}));
 }
 
 function beautify() {
@@ -186,8 +266,8 @@ function swallowImages() {
             path: finHypergridCurrDir + 'images',
             filename: 'images.js',
             header: 'module.exports = { // This file generated by gulp-imagine-64 at '
-                + (new Date).toLocaleTimeString() + ' on '
-                + (new Date).toLocaleDateString() + '\n',
+            + (new Date).toLocaleTimeString() + ' on '
+            + (new Date).toLocaleDateString() + '\n',
             footer: '\n};\n',
             options: {}
         }

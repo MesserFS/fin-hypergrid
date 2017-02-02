@@ -1,24 +1,16 @@
 'use strict';
 
-var Simple = require('./Simple');
+var CellEditor = require('./CellEditor');
 
 /**
+ * As of spring 2016:
+ * Functions well in Chrome and Firefox; unimplemented in Safari.
  * @constructor
+ * @extends CellEditor
  */
-var Color = Simple.extend('Color', {
+var Color = CellEditor.extend('Color', {
 
-    /**
-     * my lookup alias
-     * @type {string}
-     * @memberOf Color.prototype
-     */
-    alias: 'color',
-
-    template: function() {
-        /*
-            <input id="editor" type="color">
-        */
-    }
+    template: '<input type="color" lang="{{locale}}" style="{{style}}">'
 
 });
 

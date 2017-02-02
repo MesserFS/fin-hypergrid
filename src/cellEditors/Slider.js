@@ -1,24 +1,14 @@
 'use strict';
 
-var Simple = require('./Simple');
+var CellEditor = require('./CellEditor');
 
 /**
  * @constructor
+ * @extends CellEditor
  */
-var Slider = Simple.extend('Slider', {
+var Slider = CellEditor.extend('Slider', {
 
-    /**
-     * my lookup alias
-     * @type {string}
-     * @memberOf Slider.prototype
-     */
-    alias: 'slider',
-
-    template: function() {
-        /*
-            <input id="editor" type="range">
-        */
-    }
+    template: '<input type="range" lang="{{locale}}" style="{{style}}">'
 
 });
 

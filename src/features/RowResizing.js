@@ -4,10 +4,9 @@ var ColumnResizing = require('./ColumnResizing');
 
 /**
  * @constructor
+ * @extends ColumnResizing
  */
 var RowResizing = ColumnResizing.extend('RowResizing', {
-
-    alias: 'RowResizing',
 
     /**
      * the index of the row/column we are dragging

@@ -1,49 +1,28 @@
 'use strict';
 
-var Simple = require('./Simple');
+var CellEditor = require('./CellEditor');
+var Localization = require('../lib/Localization');
+
 
 /**
+ * As of spring 2016:
+ * Functions well in Chrome, Safari, Firefox, and Internet Explorer.
  * @constructor
+ * @extends CellEditor
  */
-var Textfield = Simple.extend('Textfield', {
+var Textfield = CellEditor.extend('Textfield', {
 
-    /**
-     * my lookup alias
-     * @type {string}
-     * @memberOf Textfield.prototype
-     */
-    alias: 'textfield',
+    template: '<input type="text" lang="{{locale}}" class="hypergrid-textfield" style="{{style}}">',
 
-    template: function() {
-        /*
-            <input id="editor">
-        */
+    initialize: function() {
+        this.input.style.textAlign = this.event.getCellProperty('halign');
     },
+
+    localizer: Localization.prototype.string,
 
     selectAll: function() {
         this.input.setSelectionRange(0, this.input.value.length);
-    },
-
-    specialKeyups: {
-        0x09: 'stopEditing', // tab
-        0x0d: 'stopEditing', // return/enter
-        0x1b: 'cancelEditing' // escape
-    },
-
-    keyup: function(e) {
-        if (e) {
-            Simple.prototype.keyup.call(this, e);
-
-            if (this.grid.isFilterRow(this.getEditorPoint().y)) {
-                setTimeout(keyup.bind(this));
-            }
-        }
     }
 });
-
-function keyup() {
-    this.saveEditorValue();
-    this._moveEditor();
-}
 
 module.exports = Textfield;

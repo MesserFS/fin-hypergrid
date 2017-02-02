@@ -2,124 +2,173 @@
 
 'use strict';
 
-var extend = require('extend-me');
-var deprecated = require('./lib/deprecated');
-extend.debug = true;
+require('./lib/polyfills'); // Installs misc. polyfills into global objects, as needed
 
 var FinBar = require('finbars');
 var Canvas = require('fincanvas');
 var Point = require('rectangular').Point;
 var Rectangle = require('rectangular').Rectangle;
-var _ = require('object-iterators');
+var _ = require('object-iterators'); // fyi: installs the Array.prototype.find polyfill, as needed
 
+var Base = require('./Base');
 var defaults = require('./defaults');
 var Renderer = require('./lib/Renderer');
 var SelectionModel = require('./lib/SelectionModel');
-var addStylesheet = require('../css/stylesheets');
-var TableDialog = require('./lib/TableDialog');
-var Formatters = require('./lib/Formatters');
-var CustomFilter = require('./lib/CustomFilter');
-
-// [MFS]
-var OperationQueue = require('./lib/OperationQueue');
+var stylesheet = require('./lib/stylesheet');
+var Localization = require('./lib/Localization');
+//var behaviors = require('./behaviors');
+var CellRenderers = require('./cellRenderers');
+var CellEditors = require('./cellEditors');
+var BehaviorJSON = require('./behaviors/JSON');
 
 var themeInitialized = false,
-    polymerTheme = Object.create(defaults),
-    globalProperties = Object.create(polymerTheme);
+    gridTheme = Object.create(defaults),
+    globalProperties = Object.create(gridTheme);
 
-/**
+var warned = {};
+
+/**s
  * @constructor
- * @param {string|Element} div - CSS selector or Element
- * @param {string} behaviorName - name of a behavior constructor from ./behaviors
- * @param {object} [margin] - optional canvas margins
- * @param {string} [margin.top]
- * @param {string} [margin.right='-200px']
- * @param {string} [margin.bottom]
- * @param {string} [margin.left]
+ * @param {string|Element} [container] - CSS selector or Element
+ * @param {object} [options]
+ * @param {function} [options.Behavior=behaviors.JSON] - A behavior constructor or instance
+ * @param {function[]} [options.pipeline] - A list function constructors to use for passing data through a series of transforms to occur on reindex call
+ * @param {function|object[]} [options.data] - Passed to behavior constructor. May be:
+ * * An array of congruent raw data objects
+ * * A function returning same
+ * @param {function|menuItem[]} [options.schema=derivedSchema] - Passed to behavior constructor. May be:
+ * * A schema array
+ * * A function returning a schema array. Called at filter reset time with behavior as context.
+ * * Omit to generate a basic schema from `this.behavior.columns`.
+ * @param {Behavior} [options.Behavior=JSON] - A grid behavior (descendant of Behavior "class").
+ * @param {pluginSpec|pluginSpec[]} [options.plugins]
+ * @param {DataModels[]} [options.subgrids]
+ * @param {string} [options.localization=Hypergrid.localization]
+ * @param {string|Element} [options.container] - CSS selector or Element
+ * @param {string|string[]} [options.localization.locale=Hypergrid.localization.locale] - The default locale to use when an explicit `locale` is omitted from localizer constructor calls. Passed to Intl.NumberFomrat` and `Intl.DateFomrat`. See {@ https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl#Locale_identification_and_negotiation|Locale identification and negotiation} for more information.
+ * @param {string} [options.localization.numberOptions=Hypergrid.localization.numberOptions] - Options passed to `Intl.NumberFomrat` for creating the basic "number" localizer.
+ * @param {string} [options.localization.dateOptions=Hypergrid.localization.dateOptions] - Options passed to `Intl.DateFomrat` for creating the basic "date" localizer.
+ * @param {object} [options.schema]
+ * @param {object} [options.margin] - optional canvas margins
+ * @param {string} [options.margin.top=0]
+ * @param {string} [options.margin.right=0]
+ * @param {string} [options.margin.bottom=0]
+ * @param {string} [options.margin.left=0]
+ * @param {object} [options.boundingRect] - optional grid container argument
+ * @param {string} [options.boundingRect.height=300]
+ * @param {string} [options.boundingRect.width=300]
+ * @param {string} [options.boundingRect.postion=relative]
  */
-function Hypergrid(div, behaviorFactory, margin) {
-    var self = this;
-
-    this.div = (typeof div === 'string') ? document.querySelector(div) : div;
-
-    addStylesheet('grid');
-
-    this.lastEdgeSelection = [0, 0];
-
-    this.lnfProperties = Object.create(globalProperties);
-
-    this.isWebkit = navigator.userAgent.toLowerCase().indexOf('webkit') > -1;
-    this.selectionModel = new SelectionModel(this);
-    this.localCellEditors = {};
-    this.cellEditors = Object.create(this.localCellEditors);
-    this.renderOverridesCache = {};
-    this.behavior = behaviorFactory(this);
-
-    this.operationQueue = new OperationQueue();
-    // [MFS]
-    // Enable Custom ContextMenu
-    /*
-    //prevent the default context menu for appearing
-    this.div.oncontextmenu = function(event) {
-        event.preventDefault();
-        return false;
-    };
-    */
-
-    this.clearMouseDown();
-    this.dragExtent = new Point(0, 0);
-    this.numRows = 0;
-    this.numColumns = 0;
-
-    //install any plugins
-    this.pluginsDo(function(each) {
-        if (each.installOn) {
-            each.installOn(self);
+var Hypergrid = Base.extend('Hypergrid', {
+    initialize: function(container, options) {
+        if (!themeInitialized) {
+            themeInitialized = true;
+            gridTheme = buildTheme(gridTheme);
         }
-    });
 
-    margin = margin || {};
-    margin.top = margin.top || 0;
-    margin.right = margin.right || '-200px';
-    margin.bottom = margin.bottom || 0;
-    margin.left = margin.left || 0;
+        //Optional container argument
+        if (!(typeof container === 'string') && !(container instanceof HTMLElement)) {
+            options = container;
+            container = null;
+        }
 
-    //initialize our various pieces
-    if (!themeInitialized) {
-        themeInitialized = true;
-        buildPolymerTheme();
-    }
-    this.initRenderer();
-    this.initCanvas(margin);
-    this.initScrollbars();
-    this.initLocalCellEditors();
+        this.options = options = options || {};
 
-    //Register a listener for the copy event so we can copy our selected region to the pastebuffer if conditions are right.
-    document.body.addEventListener('copy', function(evt) {
-        self.checkClipboardCopy(evt);
-    });
-    this.getCanvas().resize();
+        // Install shared plug-ins (those with a `preinstall` method)
+        Object.getPrototypeOf(this).installPlugins(options.plugins);
 
-    this.dialog = new TableDialog(this);
-    //this.computeCellsBounds();
+        this.lastEdgeSelection = [0, 0];
+        this.lnfProperties = Object.create(globalProperties);
+        this.isWebkit = navigator.userAgent.toLowerCase().indexOf('webkit') > -1;
+        this.selectionModel = new SelectionModel(this);
+        this.renderOverridesCache = {};
+        this.allowEventHandlers = true;
+        this.dragExtent = new Point(0, 0);
+        this.numRows = 0;
+        this.numColumns = 0;
+        this.clearMouseDown();
+        this.setFormatter(options.localization);
 
-    this.filter = new CustomFilter();
-   
-    // [MFS] DomReady, previously this.fire("load") but we no longer use polymer so no fire function
-    var event = new CustomEvent("load", {
-        "detail": null,
-        "bubbles": true,
-        "cancelable": true
-    });
+        // [MFS]
+        this.operationQueue = new OperationQueue();
 
-    this.div.dispatchEvent(event);
-    
-}
+        /**
+         * @name cellRenderers
+         * @type {CellRenderer}
+         * @memberOf Hypergrid.prototype
+         */
+        this.cellRenderers = new CellRenderers();
 
-Hypergrid.prototype = {
-    constructor: Hypergrid.prototype.constructor,
+        /**
+         * @name cellEditors
+         * @type {CellEditor}
+         * @memberOf Hypergrid.prototype
+         */
+        this.cellEditors = new CellEditors(this);
 
-    deprecated: deprecated,
+        //Set up the container for a grid instance
+        container = container || options.container;
+        container = container || findOrCreateContainer(options.boundingRect);
+        this.setContainer(container);
+
+        if (this.options.Behavior) {
+            this.setBehavior(this.options); // also sets this.options.pipeline and this.options.data
+        } else if (this.options.data) {
+            this.setData(this.options.data, this.options); // if no behavior has yet been set, `setData` sets a default behavior and this.options.pipeline
+        }
+
+        /**
+         * @name plugins
+         * @summary Dictionary of named instance plug-ins.
+         * @desc See examples for how to reference (albeit there is normally no need to reference plugins directly).
+         *
+         * For the dictionary of _shared_ plugins, see {@link Hypergrid.plugins|plugins} (a property of the constructor).
+         * @example
+         * var instancePlugins = myGrid.plugins;
+         * var instancePlugins = this.plugins // internal use
+         * var myInstancePlugin = myGrid.plugins.myInstancePlugin;
+         * @type {object}
+         * @memberOf Hypergrid.prototype
+         */
+        this.plugins = {};
+
+        // Install instance plug-ins (those that are constructors OR have an `install` method)
+        this.installPlugins(options.plugins);
+
+        // Listen for propagated mouseclicks. Used for aborting edit mode.
+        document.addEventListener('mousedown', this.mouseCatcher = function() {
+            this.abortEditing();
+        }.bind(this));
+
+        // [MFS] Assuming this is the constructor / initialization function
+        // [MFS] DomReady, previously this.fire("load") but we no longer use polymer so no fire function
+        var event = new CustomEvent("load", {
+            "detail": null,
+            "bubbles": true,
+            "cancelable": true
+        });
+    },
+
+    terminate: function() {
+        document.removeEventListener('mousedown', this.mouseCatcher);
+    },
+
+    registerCellEditor: function(Constructor, name) {
+        return this.deprecated('registerCellEditor(Constructor, name)', 'cellEditors.add(name, Constructor)', '1.0.6', arguments);
+    },
+    createCellEditor: function(name) {
+        return this.deprecated('createCellEditor(name)', 'cellEditors.create(name)', '1.0.6', arguments);
+    },
+    getCellProvider: function(name) {
+        return this.deprecated('getCellProvider()', 'cellRenderers', '1.0.6', arguments);
+    },
+    registerLocalizer: function(name, localizer, baseClassName, newClassName) {
+        return this.deprecated('registerLocalizer(name, localizer, baseClassName, newClassName)', 'localization.add(name, localizer)', '1.0.6', arguments,
+            'STRUCTURAL CHANGE: No longer supports deriving and registering a new cell editor class. Use .cellEditors.get(baseClassName).extend(newClassName || name, {...}) for that.');
+    },
+    getRenderer: function() {
+        return this.deprecated('getRenderer()', 'renderer', '1.1.0');
+    },
 
     /**
      *
@@ -165,12 +214,6 @@ Hypergrid.prototype = {
     hScrollValue: 0,
 
     /**
-     * @property {window.fin.rectangular} rectangular - Namespace for Point and Rectangle "classes" (constructors).
-     * @memberOf Hypergrid.prototype
-     */
-    rectangular: null,
-
-    /**
      * @property {fin-hypergrid-selection-model} selectionModel - A [fin-hypergrid-selection-model](module-._selection-model.html) instance.
      * @memberOf Hypergrid.prototype
      */
@@ -183,13 +226,13 @@ Hypergrid.prototype = {
     cellEditor: null,
 
     /**
-     * @property {fin-vampire-bar} sbHScroller - An instance of [fin-vampire-bar](http://datamadic.github.io/fin-vampire-bar/components/fin-vampire-bar/).
+     * @property {fin-vampire-bar} sbHScroller - An instance of {@link https://github.com/openfin/finbars|FinBar}.
      * @memberOf Hypergrid.prototype
      */
     sbHScroller: null,
 
     /**
-     * @property {fin-vampire-bar} sbVScroller - An instance of [fin-vampire-bar](http://datamadic.github.io/fin-vampire-bar/components/fin-vampire-bar/).
+     * @property {fin-vampire-bar} sbVScroller - An instance of {@link https://github.com/openfin/finbars|FinBar}.
      * @memberOf Hypergrid.prototype
      */
     sbVScroller: null,
@@ -209,13 +252,6 @@ Hypergrid.prototype = {
     sbPrevHScrollValue: null,
 
     /**
-     * The cache of singleton cellEditors.
-     * @type {object}
-     * @memberOf Hypergrid.prototype
-     */
-    cellEditors: null,
-
-    /**
      * is the short term memory of what column I might be dragging around
      * @type {object}
      * @memberOf Hypergrid.prototype
@@ -225,6 +261,7 @@ Hypergrid.prototype = {
 
     /**
      * The pixel location of the current hovered cell.
+     * @todo Need to detect hovering over bottom totals.
      * @type {Point}
      * @memberOf Hypergrid.prototype
      */
@@ -236,7 +273,6 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-    clear out the LRU cache of text widths
      */
     setAttribute: function(attribute, value) {
         this.div.setAttribute(attribute, value);
@@ -244,13 +280,12 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-    clear out all state and data of the grid
+     * @desc Clear out all state and data of a grid instance.
      */
     reset: function() {
         this.lastEdgeSelection = [0, 0];
         this.lnfProperties = Object.create(globalProperties);
         this.selectionModel = new SelectionModel(this);
-        this.cellEditors = Object.create(this.localCellEditors);
         this.renderOverridesCache = {};
         this.clearMouseDown();
         this.dragExtent = new Point(0, 0);
@@ -261,7 +296,7 @@ Hypergrid.prototype = {
         this.vScrollValue = 0;
         this.hScrollValue = 0;
 
-        this.cellEditor = null;
+        this.cancelEditing();
 
         this.sbPrevVScrollValue = null;
         this.sbPrevHScrollValue = null;
@@ -271,17 +306,153 @@ Hypergrid.prototype = {
         this.lastEdgeSelection = [0, 0];
 
         this.behavior.reset();
-        this.getRenderer().reset();
+        this.renderer.reset();
         this.getCanvas().resize();
         this.behaviorChanged();
+
+        this.refreshProperties();
     },
 
-    //resetTextWidthCache: function() {
-    //    textWidthCache = new LRUCache(2000);
-    //},
+    /** @typedef {object|function|Array} pluginSpec
+     * @desc One of:
+     * * simple API - a plain object with an `install` method
+     * * object API - an object constructor
+     * * array:
+     *    * first element is an optional name for the API or the newly instantiated object
+     *    * next element (or first element when not a string) is the simple or object API
+     *    * remaining arguments are optional arguments for the object constructor
+     * * falsy value such as `undefined` - ignored
+     *
+     * The API may have a `name` or `$$CLASS_NAME` property.
+     */
+    /**
+     * @summary Install plugins.
+     * @desc Plugin installation:
+     * * Each simple API is installed by calling it's `install` method with `this` as first arg + any additional args listed in the `pluginSpec` (when it is an array).
+     * * Each object API is installed by instantiating it's constructor with `this` as first arg + any additional args listed in the `pluginSpec` (when it is an array).
+     *
+     * The resulting plain object or instantiated objects may be named by (in priority order):
+     * 1. if `pluginSpec` contains an array and first element is a string
+     * 2. object has a `name` property
+     * 3. object has a `$$CLASS_NAME` property
+     *
+     * If named, a reference to each object is saved in `this.plugins`. If the plug-in is unnamed, no reference is kept.
+     *
+     * There are two types of plugin installations:
+     * * Preinstalled plugins which are installed on the prototype. These are simple API plugins with a `preinstall` method called with the `installPlugins` calling context as the first argument. Preinstallations are automatically performed whenever a grid is instantiated (at the beginning of the constructor), by calling `installPlugins` with `Hypergrid.prototype` as the calling context.
+     * * Regular plugins which are installed on the instance. These are simple API plugins with an `install` method, as well as all object API plugins (constructors), called with the `installPlugins` calling context as the first argument. These installations are automatically performed whenever a grid is instantiated (at the end of the constructor), called with the new grid instance as the calling context.
+     *
+     * Plugins may have both `preinstall` _and_ `install` methods, in which case both will be called. However, note that in any case, `install` methods on object API plugins are ignored.
+     *
+     * @this {Hypergrid|Hypergrid.prototype}
+     * @param {pluginSpec|pluginSpec[]} [plugins] - The plugins to install. This call is a no-op if omitted.
+     */
+    installPlugins: function(plugins) {
+        var shared = this === Hypergrid.prototype; // Do shared ("preinstalled") plugins (if any)
+
+        if (!plugins) {
+            return;
+        } else if (!Array.isArray(plugins)) {
+            plugins = [plugins];
+        }
+
+        plugins.forEach(function(plugin) {
+            var name, args, hash;
+
+            if (!plugin) {
+                return; // ignore falsy plugin spec
+            }
+
+            // set first arg to constructor to `this` (the grid instance)
+            // set first arg to `install` method to `this` (the grid instance)
+            // set first arg to `preinstall` method to `this` (the Hypergrid prototype)
+            args = [this];
+
+            if (Array.isArray(plugin)) {
+                if (!plugin.length) {
+                    plugin = undefined;
+                } else if (typeof plugin[0] !== 'string') {
+                    args = args.concat(plugin.slice(1));
+                    plugin = plugin[0];
+                } else if (plugin.length >= 2) {
+                    args = args.concat(plugin.slice(2));
+                    name = plugin[0];
+                    plugin = plugin[1];
+                } else {
+                    plugin = undefined;
+                }
+            }
+
+            if (!plugin) {
+                return; // ignore empty array or array with single string element
+            }
+
+            // Derive API name if not given in pluginSpec
+            name = name || plugin.name || plugin.$$CLASS_NAME;
+            if (name) {
+                // Translate first character to lower case
+                name = name.substr(0, 1).toLowerCase() + name.substr(1);
+            }
+
+            if (shared) {
+                // Execute the `preinstall` method
+                hash = this.constructor.plugins;
+                if (plugin.preinstall && !hash[name]) {
+                    plugin.preinstall.apply(plugin, args);
+                }
+            } else { // instance plug-ins:
+                hash = this.plugins;
+                if (typeof plugin === 'function') {
+                    // Install "object API" by instantiating
+                    args.unshift(null); // context for the `bind` call
+                    plugin = new (Function.prototype.bind.apply(plugin, args));
+                } else if (plugin.install) {
+                    // Install "simple API" by calling its `install` method
+                    plugin.install.apply(plugin, args);
+                } else if (!plugin.preinstall) {
+                    throw new Base.prototype.HypergridError('Expected plugin (a constructor; or an API with a `preinstall` method and/or an `install` method).');
+                }
+            }
+
+            if (name) {
+                hash[name] = plugin;
+            }
+
+        }, this);
+    },
+
+    /**
+     * @summary Uninstall all uninstallable plugins or just named plugins.
+     * @desc Calls `uninstall` on plugins that define such a method.
+     *
+     * To uninstall "preinstalled" plugins, call with `Hypergrid.prototype` as context.
+     *
+     * For convenience, the following args are passed to the call:
+     * * `this` - the plugin to be uninstalled
+     * * `grid` - the hypergrid object
+     * * `key` - name of the plugin to be uninstalled (_i.e.,_ key in `plugins`)
+     * * `plugins` - the plugins hash (a.k.a. `grid.plugins`)
+     * @param {string|stirng[]} [pluginNames] If provided, limit uninstall to the named plugin (string) or plugins (string[]).
+     */
+    uninstallPlugins: function(pluginNames) {
+        if (!pluginNames) {
+            pluginNames = [];
+        } else if (!Array.isArray(pluginNames)) {
+            pluginNames = [pluginNames];
+        }
+        _(this.plugins).each(function(plugin, key, plugins) {
+            if (
+                plugins.hasOwnProperty(key) &&
+                pluginNames.indexOf(key) >= 0 &&
+                plugin.uninstall
+            ) {
+                plugin.uninstall(this, key, plugins);
+            }
+        }, this);
+    },
 
     getProperties: function() {
-        return this.getPrivateState();
+        return this.deprecated('getProperties()', 'properties', '1.2.0');
     },
 
     _getProperties: function() {
@@ -289,104 +460,32 @@ Hypergrid.prototype = {
     },
 
     computeCellsBounds: function() {
-        var renderer = this.getRenderer();
-        if (renderer) {
-            renderer.computeCellsBounds();
-        }
+        this.renderer.computeCellsBounds();
     },
 
-    initCellEditor: function(cellEditor) {
-        this.localCellEditors[cellEditor.alias] = cellEditor;
-        cellEditor.grid = this;
+    setFormatter: function(options) {
+        options = options || {};
+        this.localization = new Localization(
+            options.locale || Hypergrid.localization.locale,
+            options.numberOptions || Hypergrid.localization.numberOptions,
+            options.dateOptions || Hypergrid.localization.dateOptions
+        );
+    },
+    getFormatter: function(localizerName) {
+        return this.localization.get(localizerName).format;
     },
 
-    initLocalCellEditors: function() {
-    // [MFS]
-        var cellEditors = [
-            'Textfield',
-            'Choice',
-            "mfsChoice",
-            "mfsNumber",
-            "readonly",
-            "filterfield",
-            //'Combo',
-            'Color',
-            'Date',
-            'Slider',
-            'Spinner',
-            'Filter'
-        ];
-
-        var self = this;
-        cellEditors.forEach(function(name) {
-            self.initCellEditor(new Hypergrid.cellEditors[name]);
-        });
-
-        this.localCellEditors.int = this.localCellEditors.spinner;
-        this.localCellEditors.float = this.localCellEditors.spinner;
-        this.localCellEditors.date = this.localCellEditors.date;
-        this.localCellEditors.string = this.localCellEditors.extfield;
-    },
-
-    toggleColumnPicker: function() {
-        this.behavior.toggleColumnPicker();
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
-     * @returns {boolean} The pointer is over the given cell.
-     * @param {number} x - The x cell coordinate.
-     * @param {number} y - The y cell coordinate.
-     */
-    isHovered: function(x, y) {
-        var p = this.getHoverCell();
-        return p && p.x === x && p.y === y;
-    },
-
-    registerFormatter: function(name, func) {
-        Formatters[name] = func;
-    },
-
-    getFormatter: function(type) {
-        var formatter = Formatters[type];
-        if (formatter) {
-            return formatter;
-        }
-        return Formatters.default;
-    },
-
-    formatValue: function(type, value) {
-        var formatter = this.getFormatter(type);
+    formatValue: function(localizerName, value) {
+        var formatter = this.getFormatter(localizerName);
         return formatter(value);
     },
 
-    /**
-     * @memberOf Hypergrid.prototype
-     * @returns boolean} The pointer is hovering over the given column.
-     * @param {number} x - The horizontal cell coordinate.
-     */
-    isColumnHovered: function(x) {
-        var p = this.getHoverCell();
-        return p && p.x === x;
-    },
-
     isRowResizeable: function() {
-        return this.resolveProperty('rowResize');
+        return this.properties.rowResize;
     },
 
     isCheckboxOnlyRowSelections: function() {
-        return this.resolveProperty('checkboxOnlyRowSelections');
-    },
-
-    /**
-     *
-     * @memberOf Hypergrid.prototype
-     * @returns {boolean} The pointer is hovering over the row `y`.
-     * @param {number} y - The vertical cell coordinate.
-     */
-    isRowHovered: function(y) {
-        var p = this.getHoverCell();
-        return p && p.y === y;
+        return this.properties.checkboxOnlyRowSelections;
     },
 
     /**
@@ -394,7 +493,7 @@ Hypergrid.prototype = {
      * @returns {Point} The cell over which the cursor is hovering.
      */
     getHoverCell: function() {
-        return this.hoverCell;
+        return this.deprecated('getHoverCell()', 'hoverCell', 'v1.2.0');
     },
 
 
@@ -410,6 +509,7 @@ Hypergrid.prototype = {
             return;
         }
         this.hoverCell = newPoint;
+        if (me) { this.fireSyntheticOnCellExitEvent(me); } //Exit first
         this.fireSyntheticOnCellEnterEvent(newPoint);
         this.repaint();
     },
@@ -434,7 +534,7 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-     * @desc Ammend properties for all hypergrids in this process.
+     * @desc Amend properties for all hypergrids in this process.
      * @param {object} properties - A simple properties hash.
      * @private
      */
@@ -449,10 +549,14 @@ Hypergrid.prototype = {
      * @desc Utility function to push out properties if we change them.
      * @param {object} properties - An object of various key value pairs.
      */
-
     refreshProperties: function() {
+        var state = this.properties;
+        this.selectionModel.multipleSelections = state.multipleSelections;
+
         // this.canvas = this.shadowRoot.querySelector('fin-canvas');
         //this.canvas = new Canvas(this.divCanvas, this.renderer); //TODO: Do we really need to be recreating it here?
+
+        this.computeCellsBounds();
         this.checkScrollbarVisibility();
         this.behavior.defaultRowHeight = null;
         if (this.isColumnAutosizing()) {
@@ -462,11 +566,11 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-     * @desc Ammend properties for this hypergrid only.
+     * @desc Amend properties for this hypergrid only.
      * @param {object} moreProperties - A simple properties hash.
      */
     addProperties: function(moreProperties) {
-        var properties = this.getProperties();
+        var properties = this.properties;
         addDeepProperties(properties, moreProperties);
         this.refreshProperties();
     },
@@ -477,7 +581,7 @@ Hypergrid.prototype = {
      * @see [Memento pattern](http://en.wikipedia.org/wiki/Memento_pattern)
      */
     getPrivateState: function() {
-        return this.behavior.getPrivateState();
+        return this.deprecate('getPrivateState()', 'properties', '1.2.0');
     },
 
     /**
@@ -489,9 +593,10 @@ Hypergrid.prototype = {
     setState: function(state) {
         var self = this;
         this.behavior.setState(state);
+        this.refreshProperties();
         setTimeout(function() {
             self.behaviorChanged();
-            self.synchronizeScrollingBoundries();
+            self.synchronizeScrollingBoundaries();
         }, 100);
     },
 
@@ -531,10 +636,9 @@ Hypergrid.prototype = {
     },
 
     /**
-     * @memberOf Hypergrid.prototype
-     set the mouse point that initated a cell edit or drag operation
-     *
+     * Set the mouse point that initiated a cell edit or drag operation.
      * @param {Point} point
+     * @memberOf Hypergrid.prototype
      */
     setMouseDown: function(point) {
         this.mouseDown.push(point);
@@ -550,7 +654,7 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-     * @summary Sets the extent point of the current drag selection operation.
+     * @summary Set the extent point of the current drag selection operation.
      * @param {Point} point
      */
     setDragExtent: function(point) {
@@ -559,42 +663,9 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-     * @summary Iterate over the plugins invoking the given function with each.
-     * @todo We need a new plugin mechanism!
-     * @param {function} func - The function to invoke on all the plugins.
-     */
-    pluginsDo: function(func) {
-        //TODO: We need a new plugin mechanism!
-        //var userPlugins = this.children.array();
-        //var pluginsTag = this.shadowRoot.querySelector('fin-plugins');
-        //
-        //var plugins = userPlugins;
-        //if (pluginsTag) {
-        //    var systemPlugins = pluginsTag.children.array();
-        //    plugins = systemPlugins.concat(plugins);
-        //}
-        //
-        //plugins.forEach(function(plugin) {
-        //    func(plugin);
-        //});
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
-     * @desc The CellProvider is accessed through Hypergrid because Hypergrid is the mediator and should have ultimate control on where it comes from. The default is to delegate through the behavior object.
-     * @returns {fin-hypergrid-cell-provider}
-     */
-    getCellProvider: function() {
-        var provider = this.behavior.getCellProvider();
-        return provider;
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
      * @desc This function is a callback from the HypergridRenderer sub-component. It is called after each paint of the canvas.
      */
     gridRenderedNotification: function() {
-        this.updateRenderedSizes();
         if (this.cellEditor) {
             this.cellEditor.gridRenderedNotification();
         }
@@ -609,19 +680,11 @@ Hypergrid.prototype = {
     checkColumnAutosizing: function() {
         var behavior = this.behavior;
         behavior.autoSizeRowNumberColumn();
-        if (this.isColumnAutosizing()) {
-            behavior.checkColumnAutosizing(false);
+        if (this.isColumnAutosizing() && behavior.checkColumnAutosizing(false)) {
+            setTimeout(function() {
+                behavior.grid.synchronizeScrollingBoundaries();
+            });
         }
-    },
-    /**
-     * @memberOf Hypergrid.prototype
-     * @desc Notify the GridBehavior how many rows and columns we just rendered.
-     */
-    updateRenderedSizes: function() {
-        //add one to each of these values as we want also to include
-        //the columns and rows that are partially visible
-        this.behavior.setRenderedColumnCount(this.getVisibleColumns() + 1);
-        this.behavior.setRenderedRowCount(this.getVisibleRows() + 1);
     },
 
     /**
@@ -674,7 +737,9 @@ Hypergrid.prototype = {
             var width = selections.length,
                 height = selections[0].length,
                 area = width * height,
-                last = width - 1;
+                lastCol = width - 1,
+                //Whitespace will only be added on non-singular rows, selections
+                whiteSpaceDelimiterForRow = (height > 1 ? '\n' : '');
 
             //disallow if selection is too big
             if (area > 20000) {
@@ -684,7 +749,7 @@ Hypergrid.prototype = {
 
             for (var h = 0; h < height; h++) {
                 for (var w = 0; w < width; w++) {
-                    result += selections[w][h] + (w < last ? '\t' : '\n');
+                    result += selections[w][h] + (w < lastCol ? '\t' : whiteSpaceDelimiterForRow);
                 }
             }
         }
@@ -737,7 +802,7 @@ Hypergrid.prototype = {
 
     clearRowSelection: function() {
         this.selectionModel.clearRowSelection();
-        this.behavior.getDataModel().getComponent().clearSelectedData();
+        this.behavior.dataModel.clearSelectedData();
     },
 
     /**
@@ -770,55 +835,85 @@ Hypergrid.prototype = {
     /**
      * @memberOf Hypergrid.prototype
      * @returns {boolean} The given column is selected anywhere in the entire table.
-     * @param {number} col - The column index.
+     * @param {number} y - The row index.
      */
-    isCellSelectedInRow: function(col) {
-        var selectionModel = this.selectionModel;
-        var isSelected = selectionModel.isCellSelectedInRow(col);
-        return isSelected;
+    isCellSelectedInRow: function(y) {
+        return this.selectionModel.isCellSelectedInRow(y);
     },
 
     /**
      * @memberOf Hypergrid.prototype
      * @returns {boolean} The given row is selected anywhere in the entire table.
-     * @param {number} row - The row index.
+     * @param {number} x - The column index.
      */
-    isCellSelectedInColumn: function(row) {
-        var selectionModel = this.selectionModel;
-        var isSelected = selectionModel.isCellSelectedInColumn(row);
-        return isSelected;
-    },
-
-    /** @deprecated Use `.selectionModel` property instead.
-     * @memberOf Hypergrid.prototype
-     * @returns {SelectionModel} The selection model.
-     */
-    getSelectionModel: function() {
-        return this.deprecated('selectionModel', { since: '0.2' });
-    },
-
-    /** @deprecated Use `.behavior` property instead.
-     * @memberOf Hypergrid.prototype
-     * @returns {Behavior} The behavior (model).
-     */
-    getBehavior: function() {
-        return this.deprecated('behavior', { since: '0.2' });
+    isCellSelectedInColumn: function(x) {
+        return this.selectionModel.isCellSelectedInColumn(x);
     },
 
     /**
      * @memberOf Hypergrid.prototype
      * @summary Set the Behavior (model) object for this grid control.
      * @desc This can be done dynamically.
-     * @param {Behavior} The behavior (model).
+     * @param {object} options - _(See {@link behaviors.JSON#setData}.)_
+     * @param {Behavior} [options.behavior=BehaviorJSON] - The behavior (model) can be either a constructor or an instance.
+     * @param {dataRowObject[]} [options.data] - _(See {@link behaviors.JSON#setData}.)_
+     * @param {pipelineSchema} [options.pipeline] - New pipeline description.
      */
-    setBehavior: function(newBehavior) {
+    setBehavior: function(options) {
+        var Behavior = options.Behavior || BehaviorJSON;
+        this.behavior = new Behavior(this, options);
+        this.initCanvas();
+        this.initScrollbars();
+        this.refreshProperties();
+        this.behavior.reindex();
+    },
 
-        this.behavior = newBehavior;
-        this.behavior.setGrid(this);
+    /**
+     * @memberOf Hypergrid.prototype
+     * @summary Set the underlying datasource.
+     * @desc This can be done dynamically.
+     * @param {function|object[]} dataRows - May be:
+     * * An array of congruent raw data objects.
+     * * A function returning same.
+     * @param {object} [options] - _(See {@link behaviors.JSON#setData}.)_
+     */
+    setData: function(dataRows, options) {
+        if (!this.behavior) {
+            // If we get hear it means:
+            // 1. `Behavior` option wasn't given to constructor.
+            // 2. `setBehavior` wasn't called explicitly.
+            // So we call it now to set the default behavior (by not specifying a `Behavior`) with the unused constructor `pipeline` option.
+            this.setBehavior({ pipeline: this.options.pipeline });
+        }
+        this.behavior.setData(dataRows, options);
+        this.behavior.changed();
+    },
 
-        this.behavior.changed = this.behaviorChanged.bind(this);
-        this.behavior.shapeChanged = this.behaviorShapeChanged.bind(this);
-        this.behavior.stateChanged = this.behaviorStateChanged.bind(this);
+    /**
+     * @memberOf Hypergrid.prototype
+     * @summary _(See {@link Hypergrid.prototype#setData}.)_
+     * @desc Binds the data and reshapes the grid (new column objects created)
+     * @param {function|object[]} dataRows - May be:
+     * * An array of congruent raw data objects.
+     * * A function returning same.
+     * @param {object} [options]
+     */
+    updateData: function(dataRows, options){
+        if (!this.behavior){
+            this.setData(dataRows, options);
+        } else {
+            this.behavior.updateData(dataRows, options);
+            this.behavior.changed();
+        }
+    },
+
+    /**
+     * @memberOf Hypergrid.prototype
+     * @param {object} [pipelines] - New pipeline description. _(See {@link dataModels.JSON#setPipeline}.)_
+     * @param {object} [options] - _(See {@link dataModels.JSON#setPipeline}.)_
+     */
+    setPipeline: function(DataSources, options){
+        this.behavior.setPipeline(DataSources, options);
     },
 
     /**
@@ -826,13 +921,36 @@ Hypergrid.prototype = {
      * @desc I've been notified that the behavior has changed.
      */
     behaviorChanged: function() {
-        if (this.numColumns !== this.getColumnCount() || this.numRows !== this.getRowCount()) {
-            this.numColumns = this.getColumnCount();
-            this.numRows = this.getRowCount();
-            this.behaviorShapeChanged();
+        if (this.divCanvas) {
+            if (this.numColumns !== this.getColumnCount() || this.numRows !== this.getRowCount()) {
+                this.numColumns = this.getColumnCount();
+                this.numRows = this.getRowCount();
+                this.behaviorShapeChanged();
+            } else {
+                this.behaviorStateChanged();
+            }
         }
-        this.computeCellsBounds();
-        this.repaint();
+    },
+
+    /**
+     * @memberOf Hypergrid.prototype
+     * @desc The dimensions of the grid data have changed. You've been notified.
+     */
+    behaviorShapeChanged: function() {
+        if (this.divCanvas) {
+            this.synchronizeScrollingBoundaries();
+        }
+    },
+
+    /**
+     * @memberOf Hypergrid.prototype
+     * @desc The dimensions of the grid data have changed. You've been notified.
+     */
+    behaviorStateChanged: function() {
+        if (this.divCanvas) {
+            this.computeCellsBounds();
+            this.repaint();
+        }
     },
 
     /**
@@ -840,8 +958,7 @@ Hypergrid.prototype = {
      * @returns {Rectangle} My bounds.
      */
     getBounds: function() {
-        var renderer = this.getRenderer();
-        return renderer && renderer.getBounds();
+        return this.renderer.getBounds();
     },
 
     /**
@@ -850,31 +967,16 @@ Hypergrid.prototype = {
      * @param {string} key - A look-and-feel key.
      */
     resolveProperty: function(key) {
-        var keys = key.split('.');
-        var prop = this.getProperties();
-        while (keys.length) { prop = prop[keys.shift()]; }
-        return prop;
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
-     * @desc The dimensions of the grid data have changed. You've been notified.
-     */
-    behaviorShapeChanged: function() {
-        this.synchronizeScrollingBoundries();
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
-     * @desc The dimensions of the grid data have changed. You've been notified.
-     */
-    behaviorStateChanged: function() {
-        this.getRenderer().computeCellsBounds();
-        this.repaint();
+        // todo: when we remove this method, also remove forwards from Behavior.js and Renderer.js
+        if (!warned.resolveProperty) {
+            warned.resolveProperty = true;
+            console.warn('resolveProperty(key) deprecated as of v1.2.0 in favor of grid.properties[key] and will be removed in a future version.');
+        }
+        return this.properties[key];
     },
 
     repaint: function() {
-        var now = this.resolveProperty('repaintImmediately');
+        var now = this.properties.repaintImmediately;
         var canvas = this.getCanvas();
         if (canvas) {
             if (now === true) {
@@ -890,8 +992,7 @@ Hypergrid.prototype = {
      * @desc Paint immediately in this microtask.
      */
     paintNow: function() {
-        var canvas = this.getCanvas();
-        canvas.paintNow();
+        this.getCanvas().paintNow();
     },
 
     /**
@@ -899,7 +1000,58 @@ Hypergrid.prototype = {
      * @returns {boolean} In HiDPI mode (has an attribute as such).
      */
     useHiDPI: function() {
-        return this.resolveProperty('useHiDPI') !== false;
+        return this.properties.useHiDPI !== false;
+    },
+
+    /**
+     * @memberOf Hypergrid.prototype
+     * @summary Set the container for a grid instance
+     * @private
+     */
+    setContainer: function(div) {
+        this.initContainer(div);
+        this.initRenderer();
+        // injectGridElements.call(this);
+    },
+
+    /**
+     * @memberOf Hypergrid.prototype
+     * @summary Initialize container
+     * @private
+     */
+    initContainer: function(div) {
+        if (typeof div === 'string') {
+            div = document.querySelector(div);
+        }
+
+        //Default Position and height to ensure DnD works
+        if (!div.style.position) {
+            div.style.position = null; // revert to stylesheet value
+        }
+
+        if (div.clientHeight < 1) {
+            div.style.height = null; // revert to stylesheet value
+        }
+
+        stylesheet.inject('grid');
+
+        // [MFS]
+        // Enable Custom ContextMenu
+        /*
+        //prevent the default context menu for appearing
+        div.oncontextmenu = function(event) {
+            event.stopPropagation();
+            event.preventDefault();
+            return false;
+        };
+        */
+
+        div.removeAttribute('tabindex');
+
+        div.classList.add('hypergrid-container');
+        div.id = div.id || 'hypergrid' + (document.querySelectorAll('.hypergrid-container').length - 1 || '');
+
+        this.div = div;
     },
 
     /**
@@ -907,15 +1059,27 @@ Hypergrid.prototype = {
      * @summary Initialize drawing surface.
      * @private
      */
-    initCanvas: function(margin) {
+    initCanvas: function() {
+        if (this.divCanvas) {
+            return;
+        }
 
-        var self = this;
+        var self = this,
+            margin = this.options.margin || {},
+            divCanvas = this.divCanvas = document.createElement('div'),
+            style = divCanvas.style;
 
-        var divCanvas = this.divCanvas = document.createElement('div');
+        style.position = 'absolute';
+        style.top = margin.top || 0;
+        style.right = margin.right || 0;
+        style.bottom = margin.bottom || 0;
+        style.left = margin.left || 0;
+
         this.div.appendChild(divCanvas);
-        this.canvas = new Canvas(divCanvas, this.renderer);
 
-        // re-implement takeFocus function
+        this.canvas = new Canvas(divCanvas, this.renderer);
+        // [MFS]
+        // re-implement takeFocus function        
         this.canvas.takeFocus = function () {
             self.addPromiseFunction(function () {
                 var p = new Promise(function(resolver, rejector) {
@@ -929,60 +1093,65 @@ Hypergrid.prototype = {
                             resolver(null);
                         }, 0);
                     }
-                });                
-            });            
+                });
+            });
         };
+        this.canvas.canvas.classList.add('hypergrid');
+        this.canvas.canvas.style.backgroundColor = this.properties.lineColor;
+        this.canvas.resize();
 
-        var style = divCanvas.style;
-        style.position = 'absolute';
-        style.top = margin.top;
-        style.right = margin.right;
-        style.bottom = margin.bottom;
-        style.left = margin.left;
+        function getMouseEvent(e) {
+            return Object.defineProperty(
+                self.getGridCellFromMousePoint(e.detail.mouse),
+                'primitiveEvent',
+                {
+                    value: e,
+                    enumerable: false,
+                    configurable: true,
+                    writable: true
+                }
+            );
+        }
 
         this.canvas.resizeNotification = function() {
             self.resized();
         };
 
         this.addEventListener('fin-canvas-mousemove', function(e) {
-            if (self.resolveProperty('readOnly')) {
+            if (self.properties.readOnly) {
                 return;
             }
-            var mouse = e.detail.mouse;
-            var mouseEvent = self.getGridCellFromMousePoint(mouse);
-            mouseEvent.primitiveEvent = e;
-            self.delegateMouseMove(mouseEvent);
+            self.delegateMouseMove(getMouseEvent(e));
         });
 
         this.addEventListener('fin-canvas-mousedown', function(e) {
-            if (self.resolveProperty('readOnly')) {
+            if (self.properties.readOnly) {
                 return;
             }
-            //self.stopEditing();
-            var mouse = e.detail.mouse;
-            var mouseEvent = self.getGridCellFromMousePoint(mouse);
+            if (!self.abortEditing()) {
+                event.stopPropagation();
+                return;
+            }
+            var mouseEvent = getMouseEvent(e);
             mouseEvent.keys = e.detail.keys;
-            mouseEvent.primitiveEvent = e;
             self.mouseDownState = mouseEvent;
             self.delegateMouseDown(mouseEvent);
             self.fireSyntheticMouseDownEvent(mouseEvent);
             self.repaint();
         });
 
-
-        // this.addEventListener('fin-canvas-click', function(e) {
-        //     if (self.resolveProperty('readOnly')) {
-        //         return;
-        //     }
-        //     //self.stopEditing();
-        //     var mouse = e.detail.mouse;
-        //     var mouseEvent = self.getGridCellFromMousePoint(mouse);
-        //     mouseEvent.primitiveEvent = e;
-        //     self.fireSyntheticClickEvent(mouseEvent);
-        // });
+        this.addEventListener('fin-canvas-click', function(e) {
+            if (self.properties.readOnly) {
+                return;
+            }
+            var mouseEvent = getMouseEvent(e);
+            mouseEvent.keys = e.detail.keys; // todo: this was in fin-tap but wasn't here
+            self.fireSyntheticClickEvent(mouseEvent);
+            self.delegateClick(mouseEvent);
+        });
 
         this.addEventListener('fin-canvas-mouseup', function(e) {
-            if (self.resolveProperty('readOnly')) {
+            if (self.properties.readOnly) {
                 return;
             }
             self.dragging = false;
@@ -992,10 +1161,7 @@ Hypergrid.prototype = {
             if (self.columnDragAutoScrolling) {
                 self.columnDragAutoScrolling = false;
             }
-            //self.stopEditing();
-            var mouse = e.detail.mouse;
-            var mouseEvent = self.getGridCellFromMousePoint(mouse);
-            mouseEvent.primitiveEvent = e;
+            var mouseEvent = getMouseEvent(e);
             self.delegateMouseUp(mouseEvent);
             if (self.mouseDownState) {
                 self.fireSyntheticButtonPressedEvent(self.mouseDownState);
@@ -1005,146 +1171,61 @@ Hypergrid.prototype = {
         });
 
         this.addEventListener('fin-canvas-dblclick', function(e) {
-            if (self.resolveProperty('readOnly')) {
+            if (self.properties.readOnly) {
                 return;
             }
-            var mouse = e.detail.mouse;
-            var mouseEvent = self.getGridCellFromMousePoint(mouse);
-            mouseEvent.primitiveEvent = e;
+            var mouseEvent = getMouseEvent(e);
             self.fireSyntheticDoubleClickEvent(mouseEvent, e);
             self.delegateDoubleClick(mouseEvent);
         });
 
-        this.addEventListener('fin-canvas-tap', function(e) {
-            if (self.resolveProperty('readOnly')) {
-                return;
-            }
-            //self.stopEditing();
-            var mouse = e.detail.mouse;
-            var tapEvent = self.getGridCellFromMousePoint(mouse);
-            tapEvent.primitiveEvent = e;
-            tapEvent.keys = e.detail.keys;
-            self.fireSyntheticClickEvent(tapEvent);
-            self.delegateTap(tapEvent);
-        });
-
         this.addEventListener('fin-canvas-drag', function(e) {
-            if (self.resolveProperty('readOnly')) {
+            if (self.properties.readOnly) {
                 return;
             }
             self.dragging = true;
-            var mouse = e.detail.mouse;
-            var mouseEvent = self.getGridCellFromMousePoint(mouse);
-            mouseEvent.primitiveEvent = e;
-            self.delegateMouseDrag(mouseEvent);
+            self.delegateMouseDrag(getMouseEvent(e));
         });
 
         this.addEventListener('fin-canvas-keydown', function(e) {
-            if (self.resolveProperty('readOnly')) {
+            if (self.properties.readOnly) {
                 return;
-            }
-            if (self.resolveProperty('editOnKeydown')) {
-                var char = e.detail.char,
-                    isVisibleChar, isDeleteChar, currentCell, editor;
-
-                if (
-                    !self.isEditing() &&
-                    (
-                        char === 'F2' ||
-                        (isVisibleChar = char.length === 1) ||
-                        (isDeleteChar = char === 'DELETE' || char === 'BACKSPACE')
-                    )
-                ) {
-                    currentCell = self.selectionModel.getLastSelection();
-                    if (currentCell) {
-                        editor = self.activateEditor(currentCell.origin.x, currentCell.origin.y);
-                        if (editor instanceof Hypergrid.cellEditors.Simple) {
-                            if (isVisibleChar) {
-                                editor.input.value = char;
-                            } else if (isDeleteChar) {
-                                editor.input.value = '';
-                            }
-                            e.detail.primitiveEvent.preventDefault();
-                        }
-                    }
-                }
             }
             self.fireSyntheticKeydownEvent(e);
             self.delegateKeyDown(e);
         });
 
         this.addEventListener('fin-canvas-keyup', function(e) {
-            if (self.resolveProperty('readOnly')) {
+            if (self.properties.readOnly) {
                 return;
             }
             self.fireSyntheticKeyupEvent(e);
             self.delegateKeyUp(e);
         });
 
-        this.addEventListener('fin-canvas-track', function(e) {
-            if (self.resolveProperty('readOnly')) {
-                return;
-            }
-            if (self.dragging) {
-                return;
-            }
-            var primEvent = e.detail.primitiveEvent;
-            if (Math.abs(primEvent.dy) > Math.abs(primEvent.dx)) {
-                if (primEvent.yDirection > 0) {
-                    self.scrollVBy(-2);
-                } else if (primEvent.yDirection < -0) {
-                    self.scrollVBy(2);
-                }
-            } else {
-                if (primEvent.xDirection > 0) {
-                    self.scrollHBy(-1);
-                } else if (primEvent.xDirection < -0) {
-                    self.scrollHBy(1);
-                }
-            }
-        });
-
-        // this.addEventListener('fin-canvas-holdpulse', function(e) {
-        //     console.log('holdpulse');
-        //     if (self.resolveProperty('readOnly')) {
-        //         return;
-        //     }
-        //     var mouse = e.detail.mouse;
-        //     var mouseEvent = self.getGridCellFromMousePoint(mouse);
-        //     mouseEvent.primitiveEvent = e;
-        //     self.delegateHoldPulse(mouseEvent);
-        // });
-
         this.addEventListener('fin-canvas-wheelmoved', function(e) {
-            var mouse = e.detail.mouse;
-            var mouseEvent = self.getGridCellFromMousePoint(mouse);
-            mouseEvent.primitiveEvent = e.detail.primitiveEvent;
-            self.delegateWheelMoved(mouseEvent);
+            self.delegateWheelMoved(getMouseEvent(e));
         });
 
         this.addEventListener('fin-canvas-mouseout', function(e) {
-            if (self.resolveProperty('readOnly')) {
+            if (self.properties.readOnly) {
                 return;
             }
-            var mouse = e.detail.mouse;
-            var mouseEvent = self.getGridCellFromMousePoint(mouse);
-            mouseEvent.primitiveEvent = e.detail.primitiveEvent;
-            self.delegateMouseExit(mouseEvent);
+            self.delegateMouseExit(getMouseEvent(e));
         });
 
         this.addEventListener('fin-canvas-context-menu', function(e) {
-            var mouse = e.detail.mouse;
-            var mouseEvent = self.getGridCellFromMousePoint(mouse);
-            mouseEvent.primitiveEvent = e.detail.primitiveEvent;
-            self.delegateContextMenu(mouseEvent);
+            self.delegateContextMenu(getMouseEvent(e));
         });
 
-        this.div.removeAttribute('tabindex');
-
+        //Register a listener for the copy event so we can copy our selected region to the pastebuffer if conditions are right.
+        document.body.addEventListener('copy', function(evt) {
+            self.checkClipboardCopy(evt);
+        });
     },
 
-    convertViewPointToDataPoint: function(viewPoint) {
-        return this.behavior.convertViewPointToDataPoint(viewPoint);
+    convertViewPointToDataPoint: function(unscrolled) {
+        return this.behavior.convertViewPointToDataPoint(unscrolled);
     },
 
     convertDataPointToViewPoint: function(dataPoint) {
@@ -1158,12 +1239,23 @@ Hypergrid.prototype = {
      * @param {function} callback - The event handler.
      */
     addEventListener: function(eventName, callback) {
-        this.canvas.addEventListener(eventName, callback);
+        var self = this;
+        var decorator = function(e) {
+            if (self.allowEventHandlers){
+                callback(e);
+            }
+        };
+        this.canvas.addEventListener(eventName, decorator);
     },
 
-    addFinEventListener: function(eventName, callback) {
-        console.warn('.addEventListener() method is deprecated as of v0.2. Use .addEventListener() instead. (Will be removed in a future release.)');
-        this.addEventListener(eventName, callback);
+    allowEvents: function(allow){
+        if ((this.allowEventHandlers = !!allow)){
+            this.behavior.featureChain.attachChain();
+        } else {
+            this.behavior.featureChain.detachChain();
+        }
+
+        this.behavior.changed();
     },
 
     /**
@@ -1189,9 +1281,7 @@ Hypergrid.prototype = {
      * @param {MouseEvent} mouseEvent - The event to interogate.
      */
     overColumnDivider: function(mouseEvent) {
-        var x = mouseEvent.primitiveEvent.detail.mouse.x;
-        var whichCol = this.getRenderer().overColumnDivider(x);
-        return whichCol;
+        return this.renderer.overColumnDivider(mouseEvent.primitiveEvent.detail.mouse.x);
     },
 
     /**
@@ -1200,14 +1290,12 @@ Hypergrid.prototype = {
      * @param {MouseEvent} mouseEvent - The event to interogate.
      */
     overRowDivider: function(mouseEvent) {
-        var y = mouseEvent.primitiveEvent.detail.mouse.y;
-        var which = this.getRenderer().overRowDivider(y);
-        return which;
+        return this.renderer.overRowDivider(mouseEvent.primitiveEvent.detail.mouse.y);
     },
 
     /**
      * @memberOf Hypergrid.prototype
-     * @desc Switch the cursor for the grid.
+     * @desc Switch the cursor for a grid instance.
      * @param {string} cursorName - A well know cursor name.
      * @see [cursor names](http://www.javascripter.net/faq/stylesc.htm)
      */
@@ -1242,7 +1330,7 @@ Hypergrid.prototype = {
      * @param {Event} event - The pertinent event.
      */
     delegateContextMenu: function(event) {
-       this. behavior.onContextMenu(this, event);
+        this.behavior.onContextMenu(this, event);
     },
 
     /**
@@ -1274,11 +1362,11 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-     * @desc Delegate tap to the behavior (model).
+     * @desc Delegate click to the behavior (model).
      * @param {mouseDetails} mouseDetails - An enriched mouse event from fin-canvas.
      */
-    delegateTap: function(mouseDetails) {
-        this.behavior.onTap(this, mouseDetails);
+    delegateClick: function(mouseDetails) {
+        this.behavior.onClick(this, mouseDetails);
     },
 
     /**
@@ -1297,15 +1385,6 @@ Hypergrid.prototype = {
      */
     delegateDoubleClick: function(mouseDetails) {
         this.behavior.onDoubleClick(this, mouseDetails);
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
-     * @desc Delegate holdpulse through the behavior (model).
-     * @param {mouseDetails} mouseDetails - An enriched mouse event from fin-canvas.
-     */
-    delegateHoldPulse: function(mouseDetails) {
-        this.behavior.onHoldPulse(this, mouseDetails);
     },
 
     /**
@@ -1329,27 +1408,38 @@ Hypergrid.prototype = {
     },
 
     /**
+     * @summary Shut down the current cell editor and save the edited value.
+     * @returns {boolean} One of:
+     * * `false` - Editing BUT could not abort.
+     * * `true` - Not editing OR was editing AND abort was successful.
      * @memberOf Hypergrid.prototype
-     * @summary Shut down the current cell editor.
      */
     stopEditing: function() {
-        if (this.cellEditor && this.isEditing()) {
-            if (this.cellEditor.stopEditing) {
-                this.cellEditor.stopEditing();
-            }
-            this.cellEditor = null;
-        }
+        return !this.cellEditor || this.cellEditor.stopEditing();
     },
 
     /**
+     * @summary Shut down the current cell editor without saving the edited val
+     * @returns {boolean} One of:
+     * * `false` - Editing BUT could not abort.
+     * * `true` - Not editing OR was editing AND abort was successful.
      * @memberOf Hypergrid.prototype
-     * @summary Register a cell editor.
-     * @desc This is typically called from within a cell-editor's `installOn` method, when it is being initialized as a plugin.
-     * @param {string} alias - The name/id of the cell editor.
-     * @param {fin-hypergrid-cell-editor-base} cellEditor - see [fin-hypergrid-cell-editor-base](module-cell-editors_base.html)
      */
-    registerCellEditor: function(alias, cellEditor) {
-        this.cellEditors[alias] = cellEditor;
+    cancelEditing: function() {
+        return !this.cellEditor || this.cellEditor.cancelEditing();
+    },
+
+    /**
+     * @summary Give cell editor opportunity to cancel (or something) instead of stop .
+     * @returns {boolean} One of:
+     * * `false` - Editing BUT could not abort.
+     * * `true` - Not editing OR was editing AND abort was successful.
+     * @memberOf Hypergrid.prototype
+     */
+    abortEditing: function() {
+        return !this.cellEditor || (
+            this.cellEditor.abortEditing ? this.cellEditor.abortEditing() : this.cellEditor.stopEditing()
+        );
     },
 
     /**
@@ -1357,22 +1447,8 @@ Hypergrid.prototype = {
      * @returns {Rectangle} The pixel coordinates of just the center 'main" data area.
      */
     getDataBounds: function() {
-        var colDNDHackWidth = 200; //this was a hack to help with column dnd, need to factor this into a shared variable
         var b = this.canvas.bounds;
-
-        //var x = this.getRowNumbersWidth();
-        // var y = behavior.getFixedRowsHeight() + 2;
-
-        var result = new Rectangle(0, 0, b.origin.x + b.extent.x - colDNDHackWidth, b.origin.y + b.extent.y);
-        return result;
-    },
-
-    getRowNumbersWidth: function() {
-        if (this.isShowRowNumbers()) {
-            return this.getRenderer().getRowNumbersWidth();
-        } else {
-            return 0;
-        }
+        return new Rectangle(0, 0, b.origin.x + b.extent.x, b.origin.y + b.extent.y);
     },
 
     /**
@@ -1385,56 +1461,62 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-     * @summary Open the given cell-editor at the provided model coordinates.
-     * @param {string} cellEditor - The specific cell editor to use.
-     * @param {Point} coordinates - The pixel locaiton of the cell to edit at.
+     * @summary Open the cell-editor for the cell at the given coordinates.
+     * @param {Point} editPoint - The grid cell coordinate mixed with the data row coordinate.
+     * @return {undefined|CellEditor} The cellEditor determined from the cell's render properties, which may be modified by logic added by overriding {@link DataModel#getCellEditorAt|getCellEditorAt}.
      */
-    editAt: function(cellEditor, coordinates) {
+    editAt: function(event) {
+        var cellEditor;
 
-        this.cellEditor = cellEditor;
-
-        var cell = coordinates.gridCell;
-
-        var x = cell.x;
-        var y = cell.y;
-
-        if (x >= 0 && y >= 0) {
-            var editPoint = new Point(x, y);
-            this.setMouseDown(editPoint);
-            this.setDragExtent(new Point(0, 0));
-            cellEditor.beginEditAt(editPoint);
+        if (arguments.length === 2) {
+            return this.deprecated('editAt(cellEditor, event)', 'editAt(event)', '1.0.6', arguments);
         }
+
+        this.abortEditing(); // if another editor is open, close it first
+
+        if (
+            event.isGridColumn &&
+            event.getCellProperty(event.isGridRow ? 'editable' : 'filterable')
+        ) {
+            this.setMouseDown(event.gridCell);
+            this.setDragExtent(new Point(0, 0));
+
+            cellEditor = this.getCellEditorAt(event);
+            if (cellEditor) {
+                cellEditor.beginEditing();
+            }
+        }
+
+        return cellEditor;
     },
 
     /**
      * @memberOf Hypergrid.prototype
-     * @returns {boolean} The given column is fully visible.
      * @param {number} columnIndex - The column index in question.
-     * @return {boolan} Visible.
+     * @returns {boolean} The given column is fully visible.
      */
     isColumnVisible: function(columnIndex) {
-        return this.getRenderer().isColumnVisible(columnIndex);
+        return this.renderer.isColumnVisible(columnIndex);
     },
 
     /**
      * @memberOf Hypergrid.prototype
+     * @param {number} r - The raw row index in question.
      * @returns {boolean} The given row is fully visible.
-     * @param {number} rowIndex - The row index in question.
-     * @return {boolan} Visible.
      */
-    isDataRowVisible: function(rowIndex) {
-        return this.getRenderer().isRowVisible(rowIndex);
+    isDataRowVisible: function(r) {
+        return this.renderer.isRowVisible(r);
     },
 
     /**
+     * @todo refac and move to CellEvent
      * @memberOf Hypergrid.prototype
+     * @param {number} c - The column index in question.
+     * @param {number} rn - The grid row index in question.
      * @returns {boolean} The given cell is fully is visible.
-     * @param {number} columnIndex - The column index in question.
-     * @param {number} rowIndex - The row index in question.
-     * @return {boolean} Data is visible.
      */
-    isDataVisible: function(columnIndex, rowIndex) {
-        return this.isDataRowVisible(rowIndex) && this.isColumnVisible(columnIndex);
+    isDataVisible: function(c, rn) {
+        return this.isDataRowVisible(rn) && this.isColumnVisible(c);
     },
 
     /**
@@ -1459,7 +1541,7 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-     * @summary Scroll in the offsetY direction if column index c is not visible.
+     * @summary Scroll in the `offsetY` direction if column index c is not visible.
      * @param {number} rowIndex - The column index in question.
      * @param {number} offsetX - The direction and magnitude to scroll if we need to.
      * @return {boolean} Row is visible.
@@ -1516,6 +1598,45 @@ Hypergrid.prototype = {
         }
     },
 
+    scrollToMakeVisible: function(c, r) {
+        var delta,
+            dw = this.renderer.dataWindow,
+            fixedColumnCount = this.properties.fixedColumnCount,
+            fixedRowCount = this.properties.fixedRowCount;
+
+        if (
+            c >= fixedColumnCount && // scroll only if target not in fixed columns
+            (
+                // target is to left of scrollable columns; negative delta scrolls left
+                (delta = c - dw.origin.x) < 0 ||
+
+                // target is to right of scrollable columns; positive delta scrolls right
+                // Note: The +1 forces right-most column to scroll left (just in case it was only partially in view)
+                (delta = c - dw.corner.x + 1) > 0
+            )
+        ) {
+            this.sbHScroller.index += delta;
+        }
+
+        if (
+            r >= fixedRowCount && // scroll only if target not in fixed rows
+            (
+                // target is above scrollable rows; negative delta scrolls up
+                (delta = r - dw.origin.y) < 0 ||
+
+                // target is below scrollable rows; positive delta scrolls down
+                (delta = r - dw.corner.y) > 0
+            )
+        ) {
+            this.sbVScroller.index += delta;
+        }
+    },
+
+    selectCellAndScrollToMakeVisible: function(c, r) {
+        this.selectCell(c, r, true);
+        this.scrollToMakeVisible(c, r);
+    },
+
     /**
      * @memberOf Hypergrid.prototype
      * @summary Answer which data cell is under a pixel value mouse point.
@@ -1523,21 +1644,19 @@ Hypergrid.prototype = {
      */
 
     getGridCellFromMousePoint: function(mouse) {
-        var cell = this.getRenderer().getGridCellFromMousePoint(mouse);
-        return cell;
+        return this.renderer.getGridCellFromMousePoint(mouse);
     },
 
     /**
+     * @param {Point} gridCell - The pixel location of the mouse in physical grid coordinates.
      * @returns {Rectangle} The pixel based bounds rectangle given a data cell point.
-     * @param {Point} cell - The pixel location of the mouse.
      * @memberOf Hypergrid.prototype
      */
-    getBoundsOfCell: function(cell) {
-        var b = this.getRenderer().getBoundsOfCell(cell);
+    getBoundsOfCell: function(gridCell) {
+        var b = this.renderer.getBoundsOfCell(gridCell.x, gridCell.y);
 
-        //we need to convert this to a proper rectangle
-        var newBounds = new Rectangle(b.x, b.y, b.width, b.height);
-        return newBounds;
+        //convert to a proper rectangle
+        return new Rectangle(b.x, b.y, b.width, b.height);
     },
 
     /**
@@ -1545,74 +1664,58 @@ Hypergrid.prototype = {
      * @desc This is called by the fin-canvas when a resize occurs.
      */
     resized: function() {
-        this.synchronizeScrollingBoundries();
+        this.synchronizeScrollingBoundaries();
     },
 
     /**
      * @memberOf Hypergrid.prototype
-     * @summary A click event occured.
+     * @summary A click event occurred.
      * @desc Determine the cell and delegate to the behavior (model).
      * @param {MouseEvent} event - The mouse event to interrogate.
+     * @returns {boolean|undefined} Changed. Specifically, one of:
+     * * `undefined` row had no drill-down control
+     * * `true` drill-down changed
+     * * `false` drill-down unchanged (was already in requested state)
      */
     cellClicked: function(event) {
-        var cell = event.gridCell;
+        var result = false;
 
         //click occurred in background area
         if (
-            cell.x <= this.getColumnCount() &&
-            cell.y <= this.getRowCount()
+            event.gridCell.x <= this.getColumnCount() &&
+            event.gridCell.y <= this.getRowCount()
         ) {
-            var hovered = this.getHoverCell(),
-                x = hovered.x,
-                y = hovered.y;
+            result = this.behavior.cellClicked(event);
 
-            // if (x >= 0) {
-            //     x = behavior.translateColumnIndex(x + this.getHScrollValue());
-            // }
-
-            if (y >= 0) {
-                y += this.getVScrollValue();
+            if (result !== undefined) {
+                this.behavior.changed();
             }
-
-            this.behavior.cellClicked(new Point(x, y), event);
         }
+
+        return result;
     },
 
     /**
      * @memberOf Hypergrid.prototype
-     * @param {number} x - column index
-     * @param {number} y - totals row index local to the totals area
-     * @param value
-     * @param {string[]} [areas=['top', 'bottom']] - may include `'top'` and/or `'bottom'`
+     * @param {number} c - grid column index.
+     * @param {string[]} keys
      */
-    setTotalsValueNotification: function(x, y, value, areas) {
-        this.fireSyntheticSetTotalsValue(x, y, value, areas);
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
-     * @param {number} x - column index
-     * @param {number} y - totals row index local to the totals area
-     * @param value
-     * @param {string[]} [areas=['top', 'bottom']] - may include `'top'` and/or `'bottom'`
-     */
-    fireSyntheticSetTotalsValue: function(x, y, value, areas) {
-        var clickEvent = new CustomEvent('fin-set-totals-value', {
+    fireSyntheticColumnSortEvent: function(c, keys) {
+        var event = new CustomEvent('fin-column-sort', {
             detail: {
-                x: x,
-                y: y,
-                value: value,
-                areas: areas
+                column: c,
+                keys: keys
             }
         });
-        this.canvas.dispatchEvent(clickEvent);
+        this.canvas.dispatchEvent(event);
     },
 
     fireSyntheticEditorKeyUpEvent: function(inputControl, keyEvent) {
         var clickEvent = new CustomEvent('fin-editor-keyup', {
             detail: {
                 input: inputControl,
-                keyEvent: keyEvent
+                keyEvent: keyEvent,
+                char: this.canvas.getCharMap()[keyEvent.keyCode][keyEvent.shiftKey ? 1 : 0]
             }
         });
         this.canvas.dispatchEvent(clickEvent);
@@ -1622,7 +1725,8 @@ Hypergrid.prototype = {
         var clickEvent = new CustomEvent('fin-editor-keydown', {
             detail: {
                 input: inputControl,
-                keyEvent: keyEvent
+                keyEvent: keyEvent,
+                char: this.canvas.getCharMap()[keyEvent.keyCode][keyEvent.shiftKey ? 1 : 0]
             }
         });
         this.canvas.dispatchEvent(clickEvent);
@@ -1632,7 +1736,8 @@ Hypergrid.prototype = {
         var clickEvent = new CustomEvent('fin-editor-keypress', {
             detail: {
                 input: inputControl,
-                keyEvent: keyEvent
+                keyEvent: keyEvent,
+                char: this.canvas.getCharMap()[keyEvent.keyCode][keyEvent.shiftKey ? 1 : 0]
             }
         });
         this.canvas.dispatchEvent(clickEvent);
@@ -1691,196 +1796,219 @@ Hypergrid.prototype = {
         this.canvas.dispatchEvent(selectionEvent);
     },
 
-
-    getRowSelection: function() {
-        var c, column, self = this,
+    getRowSelection: function(includeHiddenColumns) {
+        var column, rows, getColumn,
+            self = this,
             selectedRowIndexes = this.selectionModel.getSelectedRows(),
-            numCols = this.getColumnCount(),
+            numColumns = this.getColumnCount(),
             result = {};
 
-        function setValue(selectedRowIndex, r) {
-            column[r] = valueOrFunctionExecute(self.getValue(c, selectedRowIndex));
+        if (includeHiddenColumns) {
+            numColumns += this.getHiddenColumns().length;
+            getColumn = this.behavior.getColumn;
+        } else {
+            getColumn = this.behavior.getActiveColumn;
+        }
+        getColumn = getColumn.bind(this.behavior);
+
+        for (var c = 0; c < numColumns; c++) {
+            column = getColumn(c);
+            rows = result[column.name] = new Array(selectedRowIndexes.length);
+            selectedRowIndexes.forEach(getValue);
         }
 
-        for (c = 0; c < numCols; c++) {
-            column = new Array(selectedRowIndexes.length);
-            result[this.getField(c)] = column;
-            selectedRowIndexes.forEach(setValue);
+        function getValue(selectedRowIndex, j) {
+            var dataRow = self.getRow(selectedRowIndex);
+            rows[j] = valOrFunc.call(dataRow, column);
         }
 
         return result;
     },
 
+    getHiddenColumns: function(){
+        //A non in-memory behavior will be more troublesome
+        return this.behavior.getHiddenColumns();
+    },
+
     getRowSelectionMatrix: function() {
-        var c, self = this,
+        var self = this,
             selectedRowIndexes = this.selectionModel.getSelectedRows(),
             numCols = this.getColumnCount(),
             result = new Array(numCols);
 
-        function getValue(selectedRowIndex, r) {
-            result[c][r] = valueOrFunctionExecute(self.getValue(c, selectedRowIndex));
-        }
-
-        for (c = 0; c < numCols; c++) {
+        for (var c = 0; c < numCols; c++) {
+            var column = this.behavior.getActiveColumn(c);
             result[c] = new Array(selectedRowIndexes.length);
             selectedRowIndexes.forEach(getValue);
+        }
+
+        function getValue(selectedRowIndex, r) {
+            var dataRow = self.getRow(selectedRowIndex);
+            result[c][r] = valOrFunc.call(dataRow, column);
         }
 
         return result;
     },
 
     getColumnSelectionMatrix: function() {
-        var selectedColumnIndexes = this.getSelectedColumns();
-        var numRows = this.getRowCount();
-        var result = new Array(selectedColumnIndexes.length);
-        var self = this;
+        var dataRow,
+            self = this,
+            headerRowCount = this.getHeaderRowCount(),
+            selectedColumnIndexes = this.getSelectedColumns(),
+            numRows = this.getRowCount(),
+            result = new Array(selectedColumnIndexes.length);
+
         selectedColumnIndexes.forEach(function(selectedColumnIndex, c) {
-            result[c] = new Array(numRows);
-            for (var r = 0; r < numRows; r++) {
-                result[c][r] = valueOrFunctionExecute(self.getValue(selectedColumnIndex, r));
+            var column = self.behavior.getActiveColumn(selectedColumnIndex),
+                values = result[c] = new Array(numRows);
+
+            for (var r = headerRowCount; r < numRows; r++) {
+                dataRow = self.getRow(r);
+                values[r] = valOrFunc.call(dataRow, column);
             }
         });
+
         return result;
     },
 
     getColumnSelection: function() {
-        var selectedColumnIndexes = this.getSelectedColumns();
-        var result = {};
-        var rowCount = this.getRowCount();
-        var self = this;
+        var dataRow,
+            self = this,
+            headerRowCount = this.getHeaderRowCount(),
+            selectedColumnIndexes = this.getSelectedColumns(),
+            result = {},
+            rowCount = this.getRowCount();
+
         selectedColumnIndexes.forEach(function(selectedColumnIndex) {
-            var column = new Array(rowCount);
-            result[self.getField(selectedColumnIndex)] = column;
-            for (var r = 0; r < rowCount; r++) {
-                column[r] = valueOrFunctionExecute(self.getValue(selectedColumnIndex, r));
+            var column = self.behavior.getActiveColumn(selectedColumnIndex),
+                values = result[column.name] = new Array(rowCount);
+
+            for (var r = headerRowCount; r < rowCount; r++) {
+                dataRow = self.getRow(r);
+                values[r] = valOrFunc.call(dataRow, column);
             }
         });
+
         return result;
     },
 
     getSelection: function() {
-        var self = this;
-        var selections = this.getSelections();
-        var result = new Array(selections.length);
-        selections.forEach(function(selectionRect, i) {
-            result[i] = self._getSelection(selectionRect);
-        });
-        return result;
-    },
+        var dataRow,
+            self = this,
+            selections = this.getSelections(),
+            rects = new Array(selections.length);
 
-    _getSelection: function(rect) {
-        rect = normalizeRect(rect);
-        var colCount = rect.extent.x + 1;
-        var rowCount = rect.extent.y + 1;
-        var ox = rect.origin.x;
-        var oy = rect.origin.y;
-        var result = {};
-        var r;
-        for (var c = 0; c < colCount; c++) {
-            var column = new Array(rowCount);
-            result[this.getField(c + ox)] = column;
-            for (r = 0; r < rowCount; r++) {
-                column[r] = valueOrFunctionExecute(this.getValue(ox + c, oy + r));
+        selections.forEach(getRect);
+
+        function getRect(selectionRect, i) {
+            var rect = normalizeRect(selectionRect),
+                colCount = rect.extent.x + 1,
+                rowCount = rect.extent.y + 1,
+                columns = {};
+
+            for (var c = 0, x = rect.origin.x; c < colCount; c++, x++) {
+                var column = self.behavior.getActiveColumn(x),
+                    values = columns[column.name] = new Array(rowCount);
+
+                for (var r = 0, y = rect.origin.y; r < rowCount; r++, y++) {
+                    dataRow = self.getRow(y);
+                    values[r] = valOrFunc.call(dataRow, column);
+                }
             }
+
+            rects[i] = columns;
         }
-        return result;
+
+        return rects;
     },
 
     getSelectionMatrix: function() {
-        var self = this;
-        var selections = this.getSelections();
-        var result = new Array(selections.length);
-        selections.forEach(function(selectionRect, i) {
-            result[i] = self._getSelectionMatrix(selectionRect);
-        });
-        return result;
+        var dataRow,
+            self = this,
+            selections = this.getSelections(),
+            rects = new Array(selections.length);
+
+        selections.forEach(getRect);
+
+        function getRect(selectionRect, i) {
+            var rect = normalizeRect(selectionRect),
+                colCount = rect.extent.x + 1,
+                rowCount = rect.extent.y + 1,
+                rows = [];
+
+            for (var c = 0, x = rect.origin.x; c < colCount; c++, x++) {
+                var values = rows[c] = new Array(rowCount),
+                    column = self.behavior.getActiveColumn(x);
+
+                for (var r = 0, y = rect.origin.y; r < rowCount; r++, y++) {
+                    dataRow = self.getRow(y);
+                    values[r] = valOrFunc.call(dataRow, column);
+                }
+            }
+
+            rects[i] = rows;
+        }
+
+        return rects;
     },
 
-    _getSelectionMatrix: function(rect) {
-        rect = normalizeRect(rect);
-        var colCount = rect.extent.x + 1;
-        var rowCount = rect.extent.y + 1;
-        var ox = rect.origin.x;
-        var oy = rect.origin.y;
-        var result = [];
-        for (var c = 0; c < colCount; c++) {
-            var column = new Array(rowCount);
-            result[c] = column;
-            for (var r = 0; r < rowCount; r++) {
-                column[r] = valueOrFunctionExecute(this.getValue(ox + c, oy + r));
-            }
-        }
-        return result;
-    },
     /**
      * @memberOf Hypergrid.prototype
      * @desc Synthesize and fire a `fin-context-menu` event
      * @param {keyEvent} event - The canvas event.
      */
-    fireSyntheticContextMenuEvent: function(e) {
-        e.gridCell = this.convertViewPointToDataPoint(e.gridCell);
-        var event = new CustomEvent('fin-context-menu', {
-            detail: {
-                gridCell: e.gridCell,
-                mousePoint: e.mousePoint,
-                viewPoint: e.viewPoint,
-                primitiveEvent: e.primitiveEvent,
-                rows: this.getSelectedRows(),
-                columns: this.getSelectedColumns(),
-                selections: this.selectionModel.getSelections()
-            }
-        });
-        this.canvas.dispatchEvent(event);
+    fireSyntheticContextMenuEvent: function(event) {
+        event.rows = this.getSelectedRows();
+        event.columns = this.getSelectedColumns();
+        event.selections = this.selectionModel.getSelections();
+        this.canvas.dispatchEvent(
+            new CustomEvent('fin-context-menu', { detail: event })
+        );
     },
 
-    fireSyntheticMouseUpEvent: function(e) {
-        var event = new CustomEvent('fin-mouseup', {
-            detail: {
-                gridCell: e.gridCell,
-                mousePoint: e.mousePoint,
-                viewPoint: e.viewPoint,
-                primitiveEvent: e.primitiveEvent,
-                rows: this.getSelectedRows(),
-                columns: this.getSelectedColumns(),
-                selections: this.selectionModel.getSelections()
-            }
-        });
-        this.canvas.dispatchEvent(event);
+    fireSyntheticMouseUpEvent: function(event) {
+        event.rows = this.getSelectedRows();
+        event.columns = this.getSelectedColumns();
+        event.selections = this.selectionModel.getSelections();
+        this.canvas.dispatchEvent(
+            new CustomEvent('fin-mouseup', { detail: event })
+        );
     },
 
-    fireSyntheticMouseDownEvent: function(e) {
-        this.stopEditing();
-        var event = new CustomEvent('fin-mousedown', {
-            detail: {
-                gridCell: e.gridCell,
-                mousePoint: e.mousePoint,
-                viewPoint: e.viewPoint,
-                primitiveEvent: e.primitiveEvent,
-                rows: this.getSelectedRows(),
-                columns: this.getSelectedColumns(),
-                selections: this.selectionModel.getSelections()
-            }
-        });
-        this.canvas.dispatchEvent(event);
+    fireSyntheticMouseDownEvent: function(event) {
+        event.rows = this.getSelectedRows();
+        event.columns = this.getSelectedColumns();
+        event.selections = this.selectionModel.getSelections();
+        this.canvas.dispatchEvent(
+            new CustomEvent('fin-mousedown', { detail: event })
+        );
     },
 
     isViewableButton: function(c, r) {
-        return this.getRenderer().isViewableButton(c, r);
+        return this.renderer.isViewableButton(c, r);
     },
 
-    fireSyntheticButtonPressedEvent: function(evt) {
-        var dataCell = evt.dataCell;
-        var gridCell = evt.gridCell;
-        if (this.isViewableButton(dataCell.x, dataCell.y)) {
-            var event = new CustomEvent('fin-button-pressed', {
-                detail: {
-                    gridCell: gridCell
-                }
-            });
-            this.canvas.dispatchEvent(event);
+    fireSyntheticButtonPressedEvent: function(event) {
+        if (this.isViewableButton(event.dataCell.x, event.gridCell.y)) {
+            this.canvas.dispatchEvent(
+                new CustomEvent('fin-button-pressed', { detail: event })
+            );
         }
     },
-
+    /**
+     * @memberOf Hypergrid.prototype
+     * @desc Synthesize and fire a `fin-column-drag-start` event.
+     */
+    fireSyntheticOnColumnsChangedEvent: function() {
+        var detail = {
+            time: Date.now(),
+            grid: this
+        };
+        var cEvent = new CustomEvent('fin-column-changed-event', {
+            detail: detail
+        });
+        this.canvas.dispatchEvent(cEvent);
+    },
     /**
      * @memberOf Hypergrid.prototype
      * @desc Synthesize and fire a `fin-keydown` event.
@@ -1905,13 +2033,9 @@ Hypergrid.prototype = {
         this.canvas.dispatchEvent(clickEvent);
     },
 
-    fireSyntheticFilterAppliedEvent: function(details) {
-        var event = new CustomEvent('fin-filter-applied', {
-            detail: details
-        });
-        if (this.canvas) {
-            this.canvas.dispatchEvent(event);
-        }
+    fireSyntheticFilterAppliedEvent: function() {
+        var filterEvent = new CustomEvent('fin-filter-applied');
+        this.canvas.dispatchEvent(filterEvent);
     },
 
     /**
@@ -1931,19 +2055,6 @@ Hypergrid.prototype = {
         });
         this.canvas.dispatchEvent(clickEvent);
     },
-
-    fireSyntheticGroupsChangedEvent: function(groups) {
-        var detail = {
-            groups: groups,
-            time: Date.now(),
-            grid: this
-        };
-        var clickEvent = new CustomEvent('fin-groups-changed', {
-            detail: detail
-        });
-        this.canvas.dispatchEvent(clickEvent);
-    },
-
     /**
      * @memberOf Hypergrid.prototype
      * @desc Synthesize and fire a `fin-cell-exit` event.
@@ -1988,11 +2099,10 @@ Hypergrid.prototype = {
     /**
      * @memberOf Hypergrid.prototype
      * @desc Synthesize and fire a `fin-double-click` event.
-     * @param {Point} cell - The pixel location of the cell in which the click event occured.
      * @param {MouseEvent} event - The system mouse event.
      */
     fireSyntheticDoubleClickEvent: function(mouseEvent) {
-        this.stopEditing();
+        if (!this.abortEditing()) { return; }
         var cell = mouseEvent.gridCell;
         var detail = {
             gridCell: cell,
@@ -2049,10 +2159,8 @@ Hypergrid.prototype = {
      * @param {number} newValue - The new scroll value.
      */
     setVScrollValue: function(y) {
-        y = Math.round(y);
-        var max = this.sbVScroller.range.max;
-        y = Math.min(max, Math.max(0, y));
         var self = this;
+        y = Math.min(this.sbVScroller.range.max, Math.max(0, Math.round(y)));
         if (y !== this.vScrollValue) {
             this.behavior._setScrollPositionY(y);
             var oldY = this.vScrollValue;
@@ -2079,10 +2187,8 @@ Hypergrid.prototype = {
      * @param {number} newValue - The new scroll value.
      */
     setHScrollValue: function(x) {
-        x = Math.round(x);
-        var max = this.sbHScroller.range.max;
-        x = Math.min(max, Math.max(0, x));
         var self = this;
+        x = Math.min(this.sbHScroller.range.max, Math.max(0, Math.round(x)));
         if (x !== this.hScrollValue) {
             this.behavior._setScrollPositionX(x);
             var oldX = this.hScrollValue;
@@ -2091,7 +2197,7 @@ Hypergrid.prototype = {
             setTimeout(function() {
                 //self.sbHRangeAdapter.subjectChanged();
                 self.fireScrollEvent('fin-scroll-x', oldX, x);
-                self.synchronizeScrollingBoundries();
+                //self.synchronizeScrollingBoundries(); // todo: Commented off to prevent the grid from bouncing back, but there may be repurcussions...
             });
         }
     },
@@ -2109,9 +2215,9 @@ Hypergrid.prototype = {
      * @desc Request input focus.
      */
     takeFocus: function() {
-        if (this.isEditing()) {
-            this.stopEditing();
-        } else {
+        var wasCellEditor = this.cellEditor;
+        this.stopEditing();
+        if (!wasCellEditor) {
             // [MFS] promise version
             this.canvas.takeFocus();
         }
@@ -2123,7 +2229,7 @@ Hypergrid.prototype = {
      */
     editorTakeFocus: function() {
         if (this.cellEditor) {
-            console.log('editorTakeFocus: cellEditor.takeFocus');
+            console.log('editorTakeFocus: cellEditor.takeFocus');            
             return this.cellEditor.takeFocus();
         } else {
             console.log('editorTakeFocus: not found');
@@ -2132,17 +2238,12 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-     * @returns {boolean} We have a currently active cell editor.
-     */
-    isEditing: function() {
-        return this.cellEditor && this.cellEditor.isEditing;
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
      * @desc Initialize the scroll bars.
      */
     initScrollbars: function() {
+        if (this.sbHScroller && this.sbVScroller){
+            return;
+        }
 
         var self = this;
 
@@ -2164,8 +2265,8 @@ Hypergrid.prototype = {
         this.sbHScroller = horzBar;
         this.sbVScroller = vertBar;
 
-        var hPrefix = this.resolveProperty('hScrollbarClassPrefix');
-        var vPrefix = this.resolveProperty('vScrollbarClassPrefix');
+        var hPrefix = this.properties.hScrollbarClassPrefix;
+        var vPrefix = this.properties.vScrollbarClassPrefix;
 
         if (hPrefix && hPrefix !== '') {
             this.sbHScroller.classPrefix = hPrefix;
@@ -2179,7 +2280,6 @@ Hypergrid.prototype = {
         this.div.appendChild(vertBar.bar);
 
         this.resizeScrollbars();
-
     },
 
     resizeScrollbars: function() {
@@ -2231,7 +2331,7 @@ Hypergrid.prototype = {
      * @param {*} value
      */
     getValue: function(x, y) {
-        return this.behavior.getValue(x, y);
+        return this.behavior.getValue.apply(this.behavior, arguments);
     },
 
     /**
@@ -2241,11 +2341,7 @@ Hypergrid.prototype = {
      * @param {number} y - The vertical coordinate.
      */
     setValue: function(x, y, value) {
-        this.behavior.setValue(x, y, value);
-    },
-
-    getColumnAlignment: function(c) {
-        return this.behavior.getColumnAlignment(c);
+        this.behavior.setValue.apply(this.beahvior, arguments);
     },
 
     /**
@@ -2253,7 +2349,7 @@ Hypergrid.prototype = {
      * @desc The data dimensions have changed, or our pixel boundries have changed.
      * Adjust the scrollbar properties as necessary.
      */
-    synchronizeScrollingBoundries: function() {
+    synchronizeScrollingBoundaries: function() {
         var numFixedColumns = this.getFixedColumnCount();
         var numFixedRows = this.getFixedRowCount();
 
@@ -2264,44 +2360,46 @@ Hypergrid.prototype = {
         if (!bounds) {
             return;
         }
-        var scrollableHeight = bounds.height - this.behavior.getFixedRowsMaxHeight() - 15; //5px padding at bottom and right side
-        var scrollableWidth = (bounds.width - 200) - this.behavior.getFixedColumnsMaxWidth() - 15;
 
-        var lastPageColumnCount = 0;
-        var columnsWidth = 0;
-        for (; lastPageColumnCount < numColumns; lastPageColumnCount++) {
-            var eachWidth = this.getColumnWidth(numColumns - lastPageColumnCount - 1);
-            columnsWidth = columnsWidth + eachWidth;
-            if (columnsWidth > scrollableWidth) {
-                break;
-            }
+        // 15px padding at bottom and right side
+        var scrollableHeight = bounds.height - this.behavior.getFixedRowsMaxHeight() - 15;
+        var scrollableWidth = bounds.width - this.behavior.getFixedColumnsMaxWidth() - 15;
+
+        for (
+            var columnsWidth = 0, lastPageColumnCount = 0;
+            lastPageColumnCount < numColumns && columnsWidth <= scrollableWidth;
+            lastPageColumnCount++
+        ) {
+            columnsWidth += this.getColumnWidth(numColumns - lastPageColumnCount - 1);
         }
 
-        var lastPageRowCount = 0;
-        var rowsHeight = 0;
-        for (; lastPageRowCount < numRows; lastPageRowCount++) {
-            var eachHeight = this.getRowHeight(numRows - lastPageRowCount - 1);
-            rowsHeight = rowsHeight + eachHeight;
-            if (rowsHeight > scrollableHeight) {
-                break;
-            }
+        for (
+            var rowsHeight = 0, lastPageRowCount = 0;
+            lastPageRowCount < numRows && rowsHeight <= scrollableHeight;
+            lastPageRowCount++
+        ) {
+            rowsHeight += this.getRowHeight(numRows - lastPageRowCount - 1);
         }
 
-        var hMax = Math.max(0, numColumns - numFixedColumns - lastPageColumnCount);
-        this.setHScrollbarValues(hMax);
-
-        var vMax = 1 + Math.max(0, numRows - numFixedRows - lastPageRowCount);
-        this.setVScrollbarValues(vMax);
-
-        this.setHScrollValue(Math.min(this.getHScrollValue(), hMax));
-        this.setVScrollValue(Math.min(this.getVScrollValue(), vMax));
+        // inform scroll bars
+        if (this.sbHScroller) {
+            var hMax = 1 + Math.max(0, numColumns - numFixedColumns - lastPageColumnCount);
+            this.setHScrollbarValues(hMax);
+            this.setHScrollValue(Math.min(this.getHScrollValue(), hMax));
+        }
+        if (this.sbVScroller) {
+            var vMax = Math.max(0, numRows - numFixedRows - lastPageRowCount);
+            this.setVScrollbarValues(vMax);
+            this.setVScrollValue(Math.min(this.getVScrollValue(), vMax));
+        }
 
         //this.getCanvas().resize();
-        this.computeCellsBounds();
-        this.repaint();
+        this.behaviorStateChanged();
 
         this.resizeScrollbars();
-
+    },
+    synchronizeScrollingBoundries: function() {
+        this.deprecated('synchronizeScrollingBoundries', 'synchronizeScrollingBoundaries', '1.2.0');
     },
 
     /**
@@ -2310,7 +2408,7 @@ Hypergrid.prototype = {
      * @returns {number} The number of viewable rows.
      */
     getVisibleRows: function() {
-        return this.getRenderer().getVisibleRows();
+        return this.renderer.getVisibleRows();
     },
 
     /**
@@ -2319,7 +2417,7 @@ Hypergrid.prototype = {
      * @returns {number} The number of viewable columns.
      */
     getVisibleColumns: function() {
-        return this.getRenderer().getVisibleColumns();
+        return this.renderer.getVisibleColumns();
     },
 
     /**
@@ -2327,15 +2425,7 @@ Hypergrid.prototype = {
      * @summary Initialize the renderer sub-component.
      */
     initRenderer: function() {
-        this.renderer = new Renderer(this);
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
-     * @returns {Renderer} sub-component
-     */
-    getRenderer: function() {
-        return this.renderer;
+        this.renderer = this.renderer || new Renderer(this);
     },
 
     /**
@@ -2354,8 +2444,9 @@ Hypergrid.prototype = {
      * @param {number} columnWidth - The width in pixels.
      */
     setColumnWidth: function(columnIndex, columnWidth) {
-        this.stopEditing();
-        this.behavior.setColumnWidth(columnIndex, columnWidth);
+        if (this.abortEditing()) {
+            this.behavior.setColumnWidth(columnIndex, columnWidth);
+        }
     },
 
     getColumnEdge: function(c) {
@@ -2375,8 +2466,8 @@ Hypergrid.prototype = {
      * @returns {number} The height of the given row
      * @param {number} rowIndex - The untranslated fixed column index.
      */
-    getRowHeight: function(rowIndex) {
-        return this.behavior.getRowHeight(rowIndex);
+    getRowHeight: function(rowIndex, dataModel) {
+        return this.behavior.getRowHeight(rowIndex, dataModel);
     },
 
     /**
@@ -2385,9 +2476,10 @@ Hypergrid.prototype = {
      * @param {number} rowIndex - The row index.
      * @param {number} rowHeight - The width in pixels.
      */
-    setRowHeight: function(rowIndex, rowHeight) {
-        this.stopEditing();
-        this.behavior.setRowHeight(rowIndex, rowHeight);
+    setRowHeight: function(rowIndex, rowHeight, dataModel) {
+        if (this.abortEditing()) {
+            this.behavior.setRowHeight(rowIndex, rowHeight, dataModel);
+        }
     },
 
     /**
@@ -2399,11 +2491,12 @@ Hypergrid.prototype = {
     },
 
     /**
+     * Number of _visible_ columns.
      * @memberOf Hypergrid.prototype
      * @returns {number} The number of columns.
      */
     getColumnCount: function() {
-        return this.behavior.getColumnCount();
+        return this.behavior.getActiveColumnCount();
     },
 
     /**
@@ -2414,12 +2507,8 @@ Hypergrid.prototype = {
         return this.behavior.getRowCount();
     },
 
-    /**
-     * @memberOf Hypergrid.prototype
-     * @returns {number} The number of unfiltered rows.
-     */
     getUnfilteredRowCount: function() {
-        return this.behavior.getUnfilteredRowCount();
+        return this.deprecated('getUnfilteredRowCount()', null, '1.2.0', arguments, 'No longer supported');
     },
 
     /**
@@ -2470,47 +2559,14 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-     * @desc An edit event has occurred. Activate the editor.
-     * @param {event} event - The event details.
+     * @desc An edit event has occurred. Activate the editor at the given coordinates.
+     * @param {number} event.gridCell.x - The horizontal coordinate.
+     * @param {number} event.gridCell.y - The vertical coordinate.
+     * @param {boolean} [event.primitiveEvent.type]
+     * @returns {undefined|CellEditor} The editor object or `undefined` if no editor or editor already open.
      */
-    _activateEditor: function(event) {
-        var gridCell = event.gridCell;
-        this.activateEditor(gridCell.x, gridCell.y);
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
-     * @desc Activate the editor at the given coordinates.
-     * @param {x} x - The horizontal coordinate.
-     * @param {y} y - The vertical coordinate.
-     * @returns {CellEditor} (or objected extended from same) The editor object.
-     */
-    activateEditor: function(x, y) {
-        var editor;
-
-        if (this.isEditable() || this.isFilterRow(y)) {
-            editor = this.getCellEditorAt(x, y);
-
-            if (editor) {
-                var point = editor.getEditorPoint();
-                if (editor) {
-                    if (point.x === x && point.y === y && editor.isEditing) {
-                        return; //we're already open at this location
-                    }
-
-                    if (this.isEditing()) {
-                        this.stopEditing(); //other editor is open, close it first
-                    }
-                    event.gridCell = {
-                        x: x,
-                        y: y
-                    };
-                    this.editAt(editor, event);
-                }
-            }
-        }
-
-        return editor;
+    onEditorActivate: function(event) {
+        return this.editAt(event);
     },
 
     /**
@@ -2518,11 +2574,10 @@ Hypergrid.prototype = {
      * @summary Get the cell editor.
      * @desc Delegates to the behavior.
      * @returns The cell editor at the given coordinates.
-     * @param {x} x - The horizontal coordinate.
-     * @param {y} y - The vertical coordinate.
+     * @param {Point} cellEvent - The grid cell coordinates.
      */
-    getCellEditorAt: function(x, y) {
-        return this.behavior._getCellEditorAt(x, y);
+    getCellEditorAt: function(event) {
+        return this.behavior.getCellEditorAt(event);
     },
 
     /**
@@ -2580,20 +2635,11 @@ Hypergrid.prototype = {
 
     /**
      * @memberOf Hypergrid.prototype
-     * @returns {CellEditor} The cell editor at alias "name" (a sub-component).
-     * @param {string} name
-     */
-    resolveCellEditor: function(name) {
-        return this.cellEditors[name];
-    },
-
-    /**
-     * @memberOf Hypergrid.prototype
      * @desc Update the cursor under the hover cell.
      */
     updateCursor: function() {
         var cursor = this.behavior.getCursorAt(-1, -1);
-        var hoverCell = this.getHoverCell();
+        var hoverCell = this.hoverCell;
         if (
             hoverCell &&
             hoverCell.x > -1 &&
@@ -2612,7 +2658,7 @@ Hypergrid.prototype = {
      * @param {y} y - The vertical coordinate.
      */
     repaintCell: function(x, y) {
-        this.getRenderer().repaintCell(x, y);
+        this.renderer.repaintCell(x, y);
     },
 
     /**
@@ -2629,7 +2675,7 @@ Hypergrid.prototype = {
      * @returns {number}
      */
     pageUp: function() {
-        var rowNum = this.getRenderer().getPageUpRow();
+        var rowNum = this.renderer.getPageUpRow();
         this.setVScrollValue(rowNum);
         return rowNum;
     },
@@ -2640,7 +2686,7 @@ Hypergrid.prototype = {
      * @returns {number}
      */
     pageDown: function() {
-        var rowNum = this.getRenderer().getPageDownRow();
+        var rowNum = this.renderer.getPageDownRow();
         this.setVScrollValue(rowNum);
         return rowNum;
     },
@@ -2650,7 +2696,7 @@ Hypergrid.prototype = {
      * @desc Not yet implemented.
      */
     pageLeft: function() {
-        console.log('page left');
+        throw 'page left not yet implemented';
     },
 
     /**
@@ -2658,7 +2704,7 @@ Hypergrid.prototype = {
      * @desc Not yet implemented.
      */
     pageRight: function() {
-        console.log('page right');
+        throw 'page right not yet implemented';
     },
 
     /**
@@ -2668,15 +2714,14 @@ Hypergrid.prototype = {
     getRenderedData: function() {
         // assumes one row of headers
         var behavior = this.behavior,
-            renderer = this.getRenderer(),
-            colCount = this.getColumnCount(),
-            rowCount = renderer.getVisibleRows(),
+            colCount = this.getColumnCount().length,
+            rowCount = this.renderer.visibleRows.length,
             headers = new Array(colCount),
             results = new Array(rowCount),
             row;
 
         headers.forEach(function(header, c) {
-            headers[c] = behavior.getColumnId(c, 0);
+            headers[c] = behavior.getActiveColumn(c).header;
         });
 
         results.forEach(function(result, r) {
@@ -2706,7 +2751,7 @@ Hypergrid.prototype = {
                 };
 
             for (var c = 0; c < colCount; c++) {
-                row[behavior.getColumnId(c, 0)] = behavior.getValue(c, topRow);
+                row[behavior.getActiveColumn(c).header] = behavior.getValue(c, topRow);
             }
 
             return row;
@@ -2729,6 +2774,7 @@ Hypergrid.prototype = {
      * @desc Synthesize and fire a fin-before-cell-edit event.
      * @param {Point} cell - The x,y coordinates.
      * @param {Object} value - The current value.
+     * @returns {boolean} Proceed (don't cancel).
      */
     fireBeforeCellEdit: function(cell, oldValue, newValue, control) {
         var clickEvent = new CustomEvent('fin-before-cell-edit', {
@@ -2742,8 +2788,7 @@ Hypergrid.prototype = {
                 row: this.getRow(cell.y)
             }
         });
-        var proceed = this.canvas.dispatchEvent(clickEvent);
-        return proceed; //I wasn't cancelled
+        return this.canvas.dispatchEvent(clickEvent);
     },
 
     /**
@@ -2772,8 +2817,8 @@ Hypergrid.prototype = {
      * @desc Autosize the column at colIndex for best fit.
      * @param {number} colIndex - The column index to modify at
      */
-    autosizeColumn: function(colIndex) {
-        var column = this.behavior.getColumn(colIndex);
+    autosizeColumn: function(activeColumnIndex) {
+        var column = this.behavior.getActiveColumn(activeColumnIndex);
         column.checkColumnAutosizing(true);
         this.computeCellsBounds();
     },
@@ -2792,7 +2837,7 @@ Hypergrid.prototype = {
      * @returns {number} The number of columns that were just rendered
      */
     getVisibleColumnsCount: function() {
-        return this.getRenderer().getVisibleColumnsCount();
+        return this.renderer.getVisibleColumnsCount();
     },
 
     /**
@@ -2800,14 +2845,12 @@ Hypergrid.prototype = {
      * @returns {number} The number of rows that were just rendered
      */
     getVisibleRowsCount: function() {
-        return this.getRenderer().getVisibleRowsCount();
+        return this.renderer.getVisibleRowsCount();
     },
 
     /**
      * @memberOf Hypergrid.prototype
-    update the size of the grid
-     *
-     * #### returns: integer
+     * @desc Update the size of a grid instance.
      */
     updateSize: function() {
         this.canvas.checksize();
@@ -2847,6 +2890,8 @@ Hypergrid.prototype = {
     },
 
     swapColumns: function(source, target) {
+        //Turns out this is called during dragged 'i.e' when the floater column is reshuffled
+        //by the currently dragged column. The column positions are constantly reshuffled
         this.behavior.swapColumns(source, target);
     },
 
@@ -2859,55 +2904,45 @@ Hypergrid.prototype = {
     },
 
     isMouseDownInHeaderArea: function() {
-        var numHeaderColumns = this.getHeaderColumnCount();
-        var numHeaderRows = this.getHeaderRowCount();
+        var headerRowCount = this.getHeaderRowCount();
         var mouseDown = this.getMouseDown();
-        return mouseDown.x < numHeaderColumns || mouseDown.y < numHeaderRows;
+        return mouseDown.x < 0 || mouseDown.y < headerRowCount;
     },
 
     isHeaderWrapping: function() {
-        return this.resolveProperty('headerTextWrapping');
+        return this.properties.headerTextWrapping;
     },
 
     _getBoundsOfCell: function(x, y) {
-        return this.getRenderer()._getBoundsOfCell(x, y);
+        return this.deprecated('_getBoundsOfCell()', 'getBoundsOfCell()', '1.2.0', arguments);
     },
 
-    getColumnProperties: function(columnIndex) {
-        return this.behavior.getColumnProperties(columnIndex);
+    /**
+     * @param {index} x - Data x coordinate.
+     * @return {Object} The properties for a specific column.
+     * @memberOf Hypergrid.prototype
+     */
+    getColumnProperties: function(x) {
+        return this.behavior.getColumnProperties(x);
     },
 
-    setColumnProperties: function(columnIndex, properties) {
-        this.behavior.setColumnProperties(columnIndex, properties);
+    /**
+     * @param {index} x - Data x coordinate.
+     * @return {Object} The properties for a specific column.
+     * @memberOf Hypergrid.prototype
+     */
+    setColumnProperties: function(x, properties) {
+        this.behavior.setColumnProperties(x, properties);
     },
 
     moveSingleSelect: function(x, y) {
         this.behavior.moveSingleSelect(this, x, y);
     },
 
-    selectCell: function(x, y) {
-        this.selectionModel.clear();
-        this.selectionModel.select(x, y, 0, 0);
-    },
-
-    getHeaderColumnCount: function() {
-        return this.behavior.getHeaderColumnCount();
-    },
-
-    toggleSort: function(x, keys) {
-        this.stopEditing();
-        var behavior = this.behavior;
-        var self = this;
-        behavior.toggleSort(x, keys);
-
-        setTimeout(function() {
-            self.synchronizeScrollingBoundries();
-            //self.behaviorChanged();
-            if (self.isColumnAutosizing()) {
-                behavior.autosizeAllColumns();
-            }
-            self.repaint();
-        }, 10);
+    selectCell: function(x, y, silent) {
+        var dontClearRows = this.isCheckboxOnlyRowSelections();
+        this.selectionModel.clear(dontClearRows);
+        this.selectionModel.select(x, y, 0, 0, silent);
     },
 
     toggleSelectColumn: function(x, keys) {
@@ -2943,40 +2978,46 @@ Hypergrid.prototype = {
 
     toggleSelectRow: function(y, keys) {
         //we can select the totals rows if they exist, but not rows above that
-        if (y > this.getFilterRowIndex()) {
-            keys = keys || [];
+        keys = keys || [];
 
-            var sm = this.selectionModel;
-            var alreadySelected = sm.isRowSelected(y);
-            var hasSHIFT = keys.indexOf('SHIFT') >= 0;
+        var sm = this.selectionModel;
+        var alreadySelected = sm.isRowSelected(y);
+        var hasSHIFT = keys.indexOf('SHIFT') >= 0;
 
-            if (alreadySelected) {
-                sm.deselectRow(y);
-            } else {
-                this.singleSelect();
-                sm.selectRow(y);
-            }
-
-            if (hasSHIFT) {
-                sm.clear();
-                sm.selectRow(this.lastEdgeSelection[1], y);
-            }
-
-            if (!alreadySelected && !hasSHIFT) {
-                this.lastEdgeSelection[1] = y;
-            }
-            this.repaint();
+        if (alreadySelected) {
+            sm.deselectRow(y);
+        } else {
+            this.singleSelect();
+            sm.selectRow(y);
         }
+
+        if (hasSHIFT) {
+            sm.clear();
+            sm.selectRow(this.lastEdgeSelection[1], y);
+        }
+
+        if (!alreadySelected && !hasSHIFT) {
+            this.lastEdgeSelection[1] = y;
+        }
+
+        this.repaint();
     },
 
     singleSelect: function() {
         var isCheckboxOnlyRowSelections = this.isCheckboxOnlyRowSelections(),
             isSingleRowSelectionMode = this.isSingleRowSelectionMode(),
-            hasCTRL = this.mouseDownState.primitiveEvent.detail.primitiveEvent.ctrlKey,
-            result = (
-                isCheckboxOnlyRowSelections && isSingleRowSelectionMode ||
-                !isCheckboxOnlyRowSelections && (!hasCTRL || isSingleRowSelectionMode)
-            );
+            hasCTRL = false,
+            result;
+
+        if (this.mouseDownState){
+            //triggered programmatically
+            hasCTRL = this.mouseDownState.primitiveEvent.detail.primitiveEvent.ctrlKey;
+        }
+
+        result = (
+            isCheckboxOnlyRowSelections && isSingleRowSelectionMode ||
+            !isCheckboxOnlyRowSelections && (!hasCTRL || isSingleRowSelectionMode)
+        );
 
         if (result) {
             this.selectionModel.clearRowSelection();
@@ -2986,13 +3027,12 @@ Hypergrid.prototype = {
     },
 
     selectViewportCell: function(x, y) {
-        var headerRowCount = this.getHeaderRowCount();
-        var renderer = this.getRenderer();
-        var realX = renderer.getVisibleColumns()[x];
-        var realY = renderer.getVisibleRows()[y];
+        var headerRowCount = this.getHeaderRowCount(),
+            realX = this.renderer.visibleColumns[x].ColumnIndex, // todo refac
+            realY = this.renderer.visibleRows[y].rowIndex; // todo refac
         this.clearSelections();
         this.select(realX, realY + headerRowCount, 0, 0);
-        this.setMouseDown(this.newPoint(realX, realY + headerRowCount));
+        this.setMouseDown(this.newPoint(realX, realY + headerRowCount)); // todo refac
         this.setDragExtent(this.newPoint(0, 0));
         this.repaint();
     },
@@ -3000,12 +3040,11 @@ Hypergrid.prototype = {
     selectToViewportCell: function(x, y) {
         var selections = this.getSelections();
         if (selections && selections.length) {
-            var headerRowCount = this.getHeaderRowCount();
-            var renderer = this.getRenderer();
-            var realX = renderer.getVisibleColumns()[x];
-            var realY = renderer.getVisibleRows()[y] + headerRowCount;
-            var selection = selections[0];
-            var origin = selection.origin;
+            var headerRowCount = this.getHeaderRowCount(),
+                realX = this.renderer.visibleColumns[x].columnIndex, // todo refac
+                realY = this.renderer.visibleRows[y].rowIndex + headerRowCount, // todo refac
+                selection = selections[0],
+                origin = selection.origin;
             this.setDragExtent(this.newPoint(realX - origin.x, realY - origin.y));
             this.select(origin.x, origin.y, realX - origin.x, realY - origin.y);
             this.repaint();
@@ -3013,9 +3052,9 @@ Hypergrid.prototype = {
     },
 
     selectFinalCellOfCurrentRow: function() {
-        var x = this.getColumnCount() - 1;
-        var y = this.getSelectedRows()[0];
-        var headerRowCount = this.getHeaderRowCount();
+        var x = this.getColumnCount() - 1,
+            y = this.getSelectedRows()[0],
+            headerRowCount = this.getHeaderRowCount();
         this.clearSelections();
         this.scrollBy(this.getColumnCount(), 0);
         this.select(x, y + headerRowCount, 0, 0);
@@ -3027,10 +3066,10 @@ Hypergrid.prototype = {
     selectToFinalCellOfCurrentRow: function() {
         var selections = this.getSelections();
         if (selections && selections.length) {
-            var selection = selections[0];
-            var origin = selection.origin;
-            var extent = selection.extent;
-            var columnCount = this.getColumnCount();
+            var selection = selections[0],
+                origin = selection.origin,
+                extent = selection.extent,
+                columnCount = this.getColumnCount();
             this.scrollBy(columnCount, 0);
 
             this.clearSelections();
@@ -3041,9 +3080,9 @@ Hypergrid.prototype = {
     },
 
     selectFirstCellOfCurrentRow: function() {
-        var x = 0;
-        var y = this.getSelectedRows()[0];
-        var headerRowCount = this.getHeaderRowCount();
+        var x = 0,
+            y = this.getSelectedRows()[0],
+            headerRowCount = this.getHeaderRowCount();
         this.clearSelections();
         this.setHScrollValue(0);
         this.select(x, y + headerRowCount, 0, 0);
@@ -3055,9 +3094,9 @@ Hypergrid.prototype = {
     selectToFirstCellOfCurrentRow: function() {
         var selections = this.getSelections();
         if (selections && selections.length) {
-            var selection = selections[0];
-            var origin = selection.origin;
-            var extent = selection.extent;
+            var selection = selections[0],
+                origin = selection.origin,
+                extent = selection.extent;
             this.clearSelections();
             this.select(origin.x, origin.y, -origin.x, extent.y);
             this.setHScrollValue(0);
@@ -3074,10 +3113,10 @@ Hypergrid.prototype = {
     selectToFinalCell: function() {
         var selections = this.getSelections();
         if (selections && selections.length) {
-            var selection = selections[0];
-            var origin = selection.origin;
-            var columnCount = this.getColumnCount();
-            var rowCount = this.getRowCount();
+            var selection = selections[0],
+                origin = selection.origin,
+                columnCount = this.getColumnCount(),
+                rowCount = this.getRowCount();
 
             this.clearSelections();
             this.select(origin.x, origin.y, columnCount - origin.x - 1, rowCount - origin.y - 1);
@@ -3087,32 +3126,32 @@ Hypergrid.prototype = {
     },
 
     isShowRowNumbers: function() {
-        return this.resolveProperty('showRowNumbers');
+        return this.properties.showRowNumbers;
     },
     isEditable: function() {
-        return this.resolveProperty('editable') === true;
+        return this.properties.editable === true;
     },
-    isShowFilterRow: function() {
-        return this.resolveProperty('showFilterRow');
+
+    /**
+     * @todo row refac: deprecate in favor of CellEvent.isGridRow
+     * @param {integerRowIndex|sectionPoint} rn
+     * @returns {boolean}
+     */
+    isGridRow: function(rn) {
+        return rn >= 0 || rn.y >= 0;
     },
+
     isShowHeaderRow: function() {
-        return this.resolveProperty('showHeaderRow');
+        return this.properties.showHeaderRow;
     },
     getHeaderRowCount: function() {
         return this.behavior.getHeaderRowCount();
     },
-    isFilterRow: function(y) {
-        return y === this.getFilterRowIndex();
+
+    isShowFilterRow: function() {
+        return this.properties.showFilterRow;
     },
-    getFilterRowIndex: function() {
-        return !this.isShowFilterRow() ? -1 : this.isShowHeaderRow() ? 1 : 0;
-    },
-    setGroups: function(arrayOfColumnIndexes) {
-        this.behavior.setGroups(arrayOfColumnIndexes);
-    },
-    filterClicked: function(event) {
-        this.activateEditor(event.gridCell.x, event.gridCell.y);
-    },
+
     hasHierarchyColumn: function() {
         return this.behavior.hasHierarchyColumn();
     },
@@ -3120,8 +3159,8 @@ Hypergrid.prototype = {
         return this.hasHierarchyColumn() && x === 0;
     },
     checkScrollbarVisibility: function() {
-        // var hoverClassOver = this.resolveProperty('scrollbarHoverOver');
-        // var hoverClassOff = this.resolveProperty('scrollbarHoverOff');
+        // var hoverClassOver = this.properties.scrollbarHoverOver;
+        // var hoverClassOff = this.properties.scrollbarHoverOff;
 
         // if (hoverClassOff === 'visible') {
         //     this.sbHScroller.classList.remove(hoverClassOver);
@@ -3138,7 +3177,6 @@ Hypergrid.prototype = {
     },
     selectRow: function(y1, y2) {
         var sm = this.selectionModel;
-        var selectionEdge = this.getFilterRowIndex() + 1;
 
         if (this.singleSelect()) {
             y1 = y2;
@@ -3146,20 +3184,11 @@ Hypergrid.prototype = {
             // multiple row selection
             y2 = y2 || y1;
         }
-        var min = Math.min(y1, y2);
-        if (min >= selectionEdge) {
-            var max = Math.max(y1, y2);
-            sm.selectRow(min, max);
-        }
+
+        sm.selectRow(Math.min(y1, y2), Math.max(y1, y2));
     },
     isRowNumberAutosizing: function() {
-        return this.resolveProperty('rowNumberAutosizing');
-    },
-    isRowSelected: function(r) {
-        return this.selectionModel.isRowSelected(r);
-    },
-    isColumnSelected: function(c) {
-        return this.selectionModel.isColumnSelected(c);
+        return this.properties.rowNumberAutosizing;
     },
     lookupFeature: function(key) {
         return this.behavior.lookupFeature(key);
@@ -3167,31 +3196,19 @@ Hypergrid.prototype = {
     getRow: function(y) {
         return this.behavior.getRow(y);
     },
-    getFieldName: function(index) {
-        return this.behavior.getFieldName(index);
-    },
-
-    getColumnIndex: function(fieldName) {
-        return this.behavior.getColumnIndex(fieldName);
-    },
     isCellSelection: function() {
-        return this.resolveProperty('cellSelection') === true;
+        return this.properties.cellSelection === true;
     },
     isRowSelection: function() {
-        return this.resolveProperty('rowSelection') === true;
+        return this.properties.rowSelection === true;
     },
     isColumnSelection: function() {
-        return this.resolveProperty('columnSelection') === true;
-    },
-    getComputedRow: function(y) {
-        return this.behavior.getComputedRow(y);
+        return this.properties.columnSelection === true;
     },
     isColumnAutosizing: function() {
-        return this.resolveProperty('columnAutosizing') === true;
+        return this.properties.columnAutosizing === true;
     },
-    setGlobalFilter: function(string) {
-        this.behavior.setGlobalFilter(string);
-    },
+
     selectRowsFromCells: function() {
         if (!this.isCheckboxOnlyRowSelections()) {
             var last,
@@ -3221,9 +3238,6 @@ Hypergrid.prototype = {
     getLastSelectionType: function() {
         return this.selectionModel.getLastSelectionType();
     },
-    isCellSelected: function(x, y) {
-        return this.selectionModel.isCellSelected(x, y);
-    },
     isInCurrentSelectionRectangle: function(x, y) {
         return this.selectionModel.isInCurrentSelectionRectangle(x, y);
     },
@@ -3241,32 +3255,172 @@ Hypergrid.prototype = {
         }
         this.repaint();
     },
-    getField: function(x) {
-        return this.behavior.getField(x);
-    },
     isSingleRowSelectionMode: function() {
-        return this.resolveProperty('singleRowSelectionMode');
+        return this.properties.singleRowSelectionMode;
     },
+
     newPoint: function(x, y) {
         return new Point(x, y);
     },
     newRectangle: function(x, y, width, height) {
         return new Rectangle(x, y, width, height);
     },
-    getFormattedValue: function(x, y) {
-        y = y + this.getHeaderRowCount();
-        var formatType = this.getColumnProperties(x).format;
-        var value = this.getValue(x, y);
-        var formatter = this.getFormatter(formatType);
-        var string = formatter(value);
-        return string;
-    },
 
     // [MFS]
     addPromiseFunction: function(fn) {
         return this.operationQueue.addPromiseFunction(fn);
+    },
+
+    /**
+     * @summary _Getter_
+     * @method
+     * @returns {sorterAPI} The grid's currently assigned sorter.
+     * @memberOf dataModels.JSON.prototype
+     */
+    get sorter() {
+        return this.behavior.sorter;
+    },
+
+    /**
+     * @summary _Setter:_ Assign a sorter to the grid.
+     * @method
+     * @param {sorterAPI|undefined|null} sorter - One of:
+     * * A sorter object, turning sorting *ON*.
+     * * If `undefined` or `null`, the {@link dataModels.JSON~nullSorter|nullSorter} is reassigned to the grid, turning sorting *OFF.*
+     * @memberOf Hypergrid.prototype
+     */
+    set sorter(sorter) {
+        this.behavior.sorter = sorter;
+        this.behaviorChanged();
+    },
+
+    /**
+     * @summary _Getter_
+     * @method
+     * @returns {dataSourceHelperAPI} The grid's currently assigned filter.
+     * @memberOf Hypergrid.prototype
+     */
+    get filter() {
+        return this.behavior.filter;
+    },
+
+    /**
+     * @summary _Setter:_ Set a grid instance's filter.
+     * @desc Requires a filter data source be installed in the transformation pipeline.
+     * @method
+     * @param {dataSourceHelperAPI|undefined|null} filter - One of:
+     * * A filter object, turning filter *ON*.
+     * * If `undefined` or `null`, the null filter is reassigned to the grid, turning filtering *OFF.*
+     * @memberOf Hypergrid.prototype
+     */
+    set filter(filter) {
+        this.behavior.filter = filter;
+        this.behaviorChanged();
+    },
+
+    /**
+     * @summary Sticky hash of dialog options objects.
+     * @desc Each key is a dialog name; the value is the options object for that dialog.
+     * The default dialog options object has the key `'undefined'`, which is undefined by default; it is set by calling `setDialogOptions` with no `dialogName` parameter.
+     * @private
+     */
+    dialogOptions: {},
+
+    /**
+     * @summary Set and/or return a specific dialog options object *or* a default dialog options object.
+     *
+     * @desc If `options` defined:
+     * * If `dialogName` defined: Save the specific dialog's options object.
+     * * If `dialogName` undefined: Save the default dialog options object.
+     *
+     * If `options` is _not_ defined, no new dialog options object will be saved; but a previously saved preset will be returned (after mixing in the default preset if there is one).
+     *
+     * The default dialog options object is used in two ways:
+     * * when a dialog has no options object
+     * * as a mix-in base when a dialog does have an options object
+     *
+     * @param {string} [dialogName] If undefined, `options` defines the default dialog options object.
+     *
+     * @param {object} [options] If defined, preset the named dialog options object or the default dialog options object if name is undefined.
+     *
+     * @returns {object} One of:
+     * * When `options` undefined, first of:
+     *   * previous preset
+     *   * default preset
+     *   * empty object
+     * * When `options` defined, first of:
+     *   * mix-in: default preset members + `options` members
+     *   * `options` verbatim when default preset undefined
+     */
+    setDialogOptions: function(dialogName, options) {
+        if (typeof dialogName === 'object') {
+            options = dialogName;
+            dialogName = undefined;
+        }
+        var defaultOptions = this.dialogOptions.undefined;
+        options = options || dialogName && this.dialogOptions[dialogName];
+        if (options) {
+            this.dialogOptions[dialogName] = options;
+            if (defaultOptions) {
+                options = _({}).extend(defaultOptions, options); // make a mix-in
+            }
+        } else {
+            options = defaultOptions || {};
+        }
+        return options;
+    },
+
+    /**
+     * Options objects are remembered for subsequent use. Alternatively, they can be preset by calling {@link Hypergrid#setDialogOptions|setDialogOptions}.
+     * @param {string} dialogName
+     * @param {object} [options] - If omitted, use the options object previously given here (or to {@link Hypergrid#setDialogOptions|setDialogOptions}), if any. In any case, the resultant options object, if any, is mixed into the default options object, if there is one.
+     */
+    openDialog: function(dialogName, options) {
+        if (!this.abortEditing()) { return; }
+        options = this.setDialogOptions(dialogName, options);
+        options.terminate = function() { // when about-to-be-opened dialog is eventually closed
+            delete this.dialog;
+        }.bind(this);
+        this.dialog = this.behavior.openDialog(dialogName, options);
+    },
+
+    // although you can have multiple dialogs open at the same time, the following enforces one at a time (for now)
+    toggleDialog: function(newDialogName, options) {
+        var dialog = this.dialog,
+            oldDialogName = dialog && dialog.$$CLASS_NAME;
+        if (!dialog || !this.dialog.close() && oldDialogName !== newDialogName) {
+            if (!dialog) {
+                // open new dialog now
+                this.openDialog(newDialogName, options);
+            } else {
+                // open new dialog when already-opened dialog finishes closing due to .closeDialog() above
+                dialog.terminate = this.openDialog.bind(this, newDialogName, options);
+            }
+        }
     }
-};
+});
+
+function findOrCreateContainer(boundingRect) {
+    var div = document.getElementById('hypergrid'),
+        used = div && !div.firstElementChild;
+
+    if (!used) {
+        div = document.createElement('div');
+
+        if (boundingRect) {
+            ['width', 'height', 'position', 'top', 'bottom', 'left', 'right'].forEach(function(style) {
+                if (boundingRect[style]) {
+                    div.style[style] = boundingRect[style];
+                }
+            });
+        }
+
+        document.body.appendChild(div);
+    }
+
+    return div;
+}
+
 
 /**
  * @summary Update deep properties with new values.
@@ -3306,23 +3460,21 @@ function addDeepProperties(destination, source) {
 }
 
 function normalizeRect(rect) {
-    var o = rect.origin;
-    var c = rect.corner;
+    var o = rect.origin,
+        c = rect.corner,
 
-    var ox = Math.min(o.x, c.x);
-    var oy = Math.min(o.y, c.y);
+        ox = Math.min(o.x, c.x),
+        oy = Math.min(o.y, c.y),
 
-    var cx = Math.max(o.x, c.x);
-    var cy = Math.max(o.y, c.y);
+        cx = Math.max(o.x, c.x),
+        cy = Math.max(o.y, c.y);
 
-    var result = new Rectangle(ox, oy, cx - ox, cy - oy);
-
-    return result;
+    return new Rectangle(ox, oy, cx - ox, cy - oy);
 }
 
-function buildPolymerTheme() {
-    clearObjectProperties(polymerTheme);
-    var pb = document.createElement('paper-button');
+function buildTheme(theme) {
+    clearObjectProperties(theme);
+    var pb = document.createElement('paper-button'); // styles were based on old polymer theme
 
     pb.style.display = 'none';
     pb.setAttribute('disabled', true);
@@ -3338,47 +3490,49 @@ function buildPolymerTheme() {
     var hb = window.getComputedStyle(document.querySelector('html, body'));
     var s = window.getComputedStyle(section);
 
-    polymerTheme.columnHeaderBackgroundColor = p.color;
-    polymerTheme.rowHeaderBackgroundColor = p.color;
-    polymerTheme.topLeftBackgroundColor = p.color;
-    polymerTheme.lineColor = p.backgroundColor;
+    theme.columnHeaderBackgroundColor = p.color;
+    theme.rowHeaderBackgroundColor = p.color;
+    theme.topLeftBackgroundColor = p.color;
+    theme.lineColor = p.backgroundColor;
 
-    polymerTheme.backgroundColor2 = hb.backgroundColor;
+    theme.backgroundColor2 = hb.backgroundColor;
 
-    polymerTheme.color = h.color;
-    polymerTheme.fontFamily = h.fontFamily;
-    polymerTheme.backgroundColor = s.backgroundColor;
+    theme.color = h.color;
+    theme.fontFamily = h.fontFamily;
+    theme.backgroundColor = s.backgroundColor;
 
     pb.setAttribute('disabled', false);
     pb.setAttribute('secondary', true);
     pb.setAttribute('raised', true);
     p = window.getComputedStyle(pb);
 
-    polymerTheme.columnHeaderColor = p.color;
-    polymerTheme.rowHeaderColor = p.color;
-    polymerTheme.topLeftColor = p.color;
+    theme.columnHeaderColor = p.color;
+    theme.rowHeaderColor = p.color;
+    theme.topLeftColor = p.color;
 
 
-    polymerTheme.backgroundSelectionColor = p.backgroundColor;
-    polymerTheme.foregroundSelectionColor = p.color;
+    theme.backgroundSelectionColor = p.backgroundColor;
+    theme.foregroundSelectionColor = p.color;
 
     pb.setAttribute('secondary', false);
     pb.setAttribute('warning', true);
 
-    polymerTheme.columnHeaderForegroundSelectionColor = p.color;
-    polymerTheme.columnHeaderBackgroundSelectionColor = p.backgroundColor;
-    polymerTheme.rowHeaderForegroundSelectionColor = p.color;
-    polymerTheme.fixedColumnBackgroundSelectionColor = p.backgroundColor;
+    theme.columnHeaderForegroundSelectionColor = p.color;
+    theme.columnHeaderBackgroundSelectionColor = p.backgroundColor;
+    theme.rowHeaderForegroundSelectionColor = p.color;
+    theme.fixedColumnBackgroundSelectionColor = p.backgroundColor;
 
     //check if there is actually a theme loaded if not, clear out all bogus values
     //from my cache
-    if (polymerTheme.columnHeaderBackgroundSelectionColor === 'rgba(0, 0, 0, 0)' ||
-        polymerTheme.lineColor === 'transparent') {
-        clearObjectProperties(polymerTheme);
+    if (theme.columnHeaderBackgroundSelectionColor === 'rgba(0, 0, 0, 0)' ||
+        theme.lineColor === 'transparent') {
+        clearObjectProperties(theme);
     }
 
     document.body.removeChild(pb);
     document.body.removeChild(section);
+
+    return theme;
 }
 
 function clearObjectProperties(obj) {
@@ -3389,9 +3543,56 @@ function clearObjectProperties(obj) {
     }
 }
 
-function valueOrFunctionExecute(valueOrFunction) {
-    var result = typeof valueOrFunction === 'function' ? valueOrFunction() : valueOrFunction;
-    return result || result === 0 ? result : '';
+/**
+ * @this {dataRowObject}
+ * @param column
+ * @returns {string}
+ */
+function valOrFunc(column) {
+    var result, calculator;
+    if (this) {
+        result = this[column.name];
+        calculator = (typeof result)[0] === 'f' && result || column.calculator;
+        if (calculator) {
+            result = calculator.call(this, column.name);
+        }
+    }
+    return result || result === 0 || result === false ? result : '';
 }
+
+/**
+ * @summary Hash of references to shared plug-ins.
+ * @desc Dictionary of shared (pre-installed) plug-ins. Used internally, primarily to avoid reinstallations. See examples for how to reference (albeit there is normally no need to reference plugins directly).
+ *
+ * For the dictionary of _instance_ plugins, see {@link Hypergrid#plugins|plugins} (defined in the {@link Hypergrid#intialize|Hypergrid constructor}).
+ *
+ * To force reinstallation of a shared plugin delete it first:
+ * ```javascript
+ * delete Hypergrid.plugins.mySharedPlugin;
+ * ```
+ * To force reinstallation of all shared plugins:
+ * ```javascript
+ * Hypergrid.plugins = {};
+ * ```
+ * @example
+ * var allSharedPlugins = Hypergrid.plugins;
+ * var mySharedPlugin = Hypergrid.plugins.mySharedPlugin;
+ * @type {object}
+ */
+Hypergrid.plugins = {};
+
+/**
+ * @summary Shared localization defaults for all grid instances.
+ * @desc These property values are overridden by those supplied in the `Hypergrid` constructor's `options.localization`.
+ * @property {string|string[]} [locale] - The default locale to use when an explicit `locale` is omitted from localizer constructor calls. Passed to Intl.NumberFormat` and `Intl.DateFormat`. See {@ https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl#Locale_identification_and_negotiation|Locale identification and negotiation} for more information. Omitting will use the runtime's local language and region.
+ * @property {object} [numberOptions] - Options passed to `Intl.NumberFormat` for creating the basic "number" localizer.
+ * @property {object} [dateOptions] - Options passed to `Intl.DateFormat` for creating the basic "date" localizer.
+ * @type {object}
+ */
+
+Hypergrid.localization = {
+    locale: 'en-US',
+    numberOptions: { maximumFractionDigits: 0 }
+};
 
 module.exports = Hypergrid;

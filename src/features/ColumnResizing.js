@@ -1,13 +1,12 @@
 'use strict';
 
-var Feature = require('./Feature.js');
+var Feature = require('./Feature');
 
 /**
  * @constructor
+ * @extends Feature
  */
 var ColumnResizing = Feature.extend('ColumnResizing', {
-
-    alias: 'ColumnResizing',
 
     /**
      * the index of the column wall were currently dragging
@@ -130,7 +129,6 @@ var ColumnResizing = Feature.extend('ColumnResizing', {
 
     /**
      * @memberOf ColumnResizing.prototype
-     * @desc handle this event
      * @param {Hypergrid} grid
      * @param {Object} event - the event details
      */
@@ -173,7 +171,6 @@ var ColumnResizing = Feature.extend('ColumnResizing', {
 
     /**
      * @memberOf ColumnResizing.prototype
-     * @desc handle this event down the feature chain of responsibility
      * @param {Hypergrid} grid
      * @param {Object} event - the event details
      */
@@ -196,7 +193,6 @@ var ColumnResizing = Feature.extend('ColumnResizing', {
 
     /**
      * @memberOf ColumnResizing.prototype
-     * @desc handle this event down the feature chain of responsibility
      * @param {Hypergrid} grid
      * @param {Object} event - the event details
      */
@@ -209,7 +205,7 @@ var ColumnResizing = Feature.extend('ColumnResizing', {
             event.primitiveEvent.stopPropagation();
             //delay here to give other events a chance to be dropped
             var self = this;
-            grid.synchronizeScrollingBoundries();
+            grid.synchronizeScrollingBoundaries();
             setTimeout(function() {
                 self.attachChain();
             }, 200);
@@ -220,7 +216,6 @@ var ColumnResizing = Feature.extend('ColumnResizing', {
 
     /**
      * @memberOf ColumnResizing.prototype
-     * @desc handle this event down the feature chain of responsibility
      * @param {Hypergrid} grid
      * @param {Object} event - the event details
      */

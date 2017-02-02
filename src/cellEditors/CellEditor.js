@@ -3,34 +3,117 @@
 'use strict';
 
 var mustache = require('mustache');
-var Base = require('../lib/Base');
+var _ = require('object-iterators');
 
-var extract = /\/\*\s*([^]+?)\s+\*\//; // finds the string inside the /* ... */; the (group) excludes the whitespace
+var Base = require('../Base');
+var effects = require('../lib/DOM/effects');
+var Localization = require('../lib/Localization');
 
 /**
  * @constructor
  */
 var CellEditor = Base.extend('CellEditor', {
 
-    alias: 'base',
-
     /**
-     * am I currently editing (i.e., between calls to `beginEditAt` and either `stopEditing` or `cancelEditing`)
-     * @type {boolean}
-     * @default false
-     * @memberOf CellEditor.prototype
+     * @param grid
+     * @param {CellEvent} options - Properties listed below + arbitrary mustache "variables" for merging into template.
+     * @param {Point} options.editPoint - Deprecated; use `options.gridCell`.
+     * @param {string} [options.format] - Name of a localizer with which to override prototype's `localizer` property.
      */
-    isEditing: false,
+    initialize: function(grid, options) {
+        // Mix in all enumerable properties for mustache use.
+        for (var key in options) {
+            if (options.hasOwnProperty(key) && this[key] !== null) {
+                this[key] = options[key];
+            }
+        }
 
-    /**
-     * the point that I am editing at right now
-     * @type {Point}
-     * @default null
-     * @memberOf CellEditor.prototype
-     */
-    editorPoint: {
-        x: -1,
-        y: -1
+        this.event = options;
+
+        var value = grid.behavior.getValue(this.event);
+        if (value instanceof Array) {
+            value = value[1]; //it's a nested object
+        }
+
+        /**
+         * my instance of hypergrid
+         * @type {Hypergrid}
+         * @memberOf CellEditor.prototype
+         */
+        this.grid = grid;
+
+        this.grid.cellEditor = this;
+
+        this.locale = grid.localization.locale; // for template's `lang` attribute
+
+        // override native localizer with localizer named in format if defined (from instantiation options)
+        if (options.format) {
+            this.localizer = this.grid.localization.get(options.format);
+        }
+
+        this.initialValue = value;
+
+        var container = document.createElement('DIV');
+        container.innerHTML = mustache.render(this.template, this);
+
+        /**
+         * This object's input control, one of:
+         * * *input element* - an `HTMLElement` that has a `value` attribute, such as `HTMLInputElement`, `HTMLButtonElement`, etc.
+         * * *container element* - an `HTMLElement` containing one or more input elements, only one of which contains the editor value.
+         *
+         * For access to the input control itself (which may or may not be the same as `this.el`), see `this.input`.
+         *
+         * @type {HTMLElement}
+         * @default null
+         * @memberOf CellEditor.prototype
+         */
+        this.el = container.firstChild;
+
+        this.input = this.el;
+
+        this.errors = 0;
+
+        var self = this;
+        this.el.addEventListener('keyup', this.keyup.bind(this));
+        this.el.addEventListener('keydown', function(e) {
+            grid.fireSyntheticEditorKeyDownEvent(self, e);
+        });
+        this.el.addEventListener('keypress', function(e) {
+            grid.fireSyntheticEditorKeyPressEvent(self, e);
+        });
+        this.el.addEventListener('mousedown', function(e) {
+            self.onmousedown(e);
+        });
+    },
+
+    // If you override this method, be sure to call it as a final step (or call stopPropagation yourself).
+    onmousedown: function(event) {
+        event.stopPropagation(); // Catch mouseodwn here before it gets to the document listener defined in Hypergrid().
+    },
+
+    localizer: Localization.prototype.null,
+
+    specialKeyups: {
+        //0x08: 'clearStopEditing', // backspace
+        0x09: 'stopEditing', // tab
+        0x0d: 'stopEditing', // return/enter
+        0x1b: 'cancelEditing' // escape
+    },
+
+    keyup: function(e) {
+        if (e) {
+            var specialKeyup = this.specialKeyups[e.keyCode];
+
+            if (specialKeyup) {
+                e.preventDefault();
+                if (this[specialKeyup](3)) {
+                    this.grid.repaint();
+                    this.grid.takeFocus();
+                }
+            }
+
+            this.grid.fireSyntheticEditorKeyUpEvent(this, e);
+        }
     },
 
     /**
@@ -40,30 +123,6 @@ var CellEditor = Base.extend('CellEditor', {
      * @memberOf CellEditor.prototype
      */
     checkEditorPositionFlag: false,
-
-    /**
-     * my instance of hypergrid
-     * @type {Hypergrid}
-     * @default null
-     * @memberOf CellEditor.prototype
-     */
-    grid: null,
-
-    /**
-     * the value before editing
-     * @type {type}
-     * @default null
-     * @memberOf CellEditor.prototype
-     */
-    initialValue: null,
-
-    /** @deprecated Use `.grid.behavior` property instead.
-     * @memberOf CellEditor.prototype
-     * @returns {Behavior} The behavior (model).
-     */
-    getBehavior: function() {
-        return this.deprecated('grid.behavior', { since: '0.2' });
-    },
 
     /**
      * @memberOf CellEditor.prototype
@@ -78,31 +137,35 @@ var CellEditor = Base.extend('CellEditor', {
      * @desc scroll values have changed, we've been notified
      */
     scrollValueChangedNotification: function() {
-        this.setCheckEditorPositionFlag();
-    },
-
-    /**
-     * @memberOf CellEditor.prototype
-     * @desc turn on checkEditorPositionFlag boolean field
-     */
-    setCheckEditorPositionFlag: function() {
         this.checkEditorPositionFlag = true;
     },
 
     /**
      * @memberOf CellEditor.prototype
-     * @desc begin editing at location point
-     * @param {Point} point - the location to start editing at
+     * @desc move the editor to the current editor point
      */
+    moveEditor: function() {
+        var cellBounds = this.event.bounds;
+
+        //hack to accommodate bootstrap margin issues...
+        var xOffset =
+            this.grid.div.getBoundingClientRect().left -
+            this.grid.divCanvas.getBoundingClientRect().left;
+
+        cellBounds.x -= xOffset;
+
+        this.setBounds(cellBounds);
+    },
+
     // [MFS]
-    /**
-    * @function
-    * @instance
-    * @description
-    begin editing at location point
-    * @param {rectangle.point} point - the location to start editing at
-    */
-    beginEditAt: function (point) {
+    beginEditing: function() {
+        /*
+        if (this.grid.fireRequestCellEdit(this.event.gridCell, this.initialValue)) {
+            this.checkEditorPositionFlag = true;
+            this.checkEditor();
+        }
+        */
+
         //// [MFS] Only exeucte when DataWriteLock is acquired
         if (this.acquireDataWriteLock && !this.acquireDataWriteLock()) {
             console.warn("Cannot acquire DataWriteLock.");
@@ -114,143 +177,322 @@ var CellEditor = Base.extend('CellEditor', {
             return;
         }
 
-        var self = this;
-        this.grid.addPromiseFunction(() => {
-            return self.realBeginEditAt(point);
-        });
+        this.grid.addPromiseFunction(this.realBeginEditing.bind(this));
+    },
+    beginEditAt: function(Constructor, name) {
+        return this.deprecated('beginEditAt(point)', 'beginEditing()', '1.0.6');
     },
 
-    realBeginEditAt: function (point) {
-        this.setEditorPoint(point);
-        var model = this.getBehavior();
-        var value = model._getValue(point.x, point.y);
-        var proceed = this.grid.fireBeforeCellEdit(point, value);
-        if (!proceed) {
-            //we were cancelled
-            return;
+    // [MFS]
+    realBeginEditing: function() {
+        if (this.grid.fireRequestCellEdit(this.event.gridCell, this.initialValue)) {
+            this.checkEditorPositionFlag = true;
+            this.checkEditor();
         }
-        this.initialValue = value;
-        this.setEditorValue(value);
-        this.isEditing = true;
-        this.setCheckEditorPositionFlag();
-        this.checkEditor();
     },
 
     /**
+     * @summary Put the value into our editor.
+     * @desc Formats the value and displays it.
+     * The localizer's {@link localizerInterface#format|format} method will be called.
+     *
+     * Override this method if your editor has additional or alternative GUI elements.
+     *
+     * @param {object} value - The raw unformatted value from the data source that we want to edit.
      * @memberOf CellEditor.prototype
-     * @desc put value into our editor
-     * @param {object} value - whatever value we want to edit
      */
-    setEditorValue: function(value) {},
-
-    /**
-     * @memberOf CellEditor.prototype
-     * @desc returns the point at which we are currently editing
-     * @returns {Point}
-     */
-    getEditorPoint: function() {
-        return this.editorPoint;
-    },
-
-    /**
-     * @memberOf CellEditor.prototype
-     * @desc set the current editor location
-     * @param {Point} point - the data location of the current editor
-     */
-    setEditorPoint: function(point) {
-        this.editorPoint = point;
-        this.modelPoint = this.grid.convertViewPointToDataPoint(point);
+    setEditorValue: function(value) {
+        this.input.value = this.localizer.format(value);
     },
 
     /**
      * @memberOf CellEditor.prototype
      * @desc display the editor
      */
-    showEditor: function() {},
+    showEditor: function() {
+        this.el.style.display = 'inline';
+    },
 
     /**
      * @memberOf CellEditor.prototype
      * @desc hide the editor
      */
-    hideEditor: function() {},
+    hideEditor: function() {
+        this.el.style.display = 'none';
+    },
+
+    /** @summary Stops editing.
+     * @desc Before saving, validates the edited value in two phases as follows:
+     * 1. Call `validateEditorValue`. (Calls the localizer's `invalid()` function, if available.)
+     * 2. Catch any errors thrown by the {@link CellEditor#getEditorValue|getEditorValue} method.
+     *
+     * **If the edited value passes both phases of the validation:**
+     * Saves the edited value by calling the {@link CellEditor#saveEditorValue|saveEditorValue} method.
+     *
+     * **On validation failure:**
+     * 1. If `feedback` was omitted, cancels editing, discarding the edited value.
+     * 2. If `feedback` was provided, gives the user some feedback (see `feedback`, below).
+     *
+     * @param {number} [feedback] What to do on validation failure:
+     * * If omitted, simply cancels editing without saving edited value.
+     * * If 0, shows the error feedback effect (see the {@link CellEditor#errorEffect|errorEffect} property).
+     * * If > 0, shows the error feedback effect _and_ calls the {@link CellEditor#errorEffectEnd|errorEffectEnd} method) every `feedback` call(s) to `stopEditing`.
+     * @returns {boolean} Truthy means successful stop. Falsy means syntax error prevented stop. Note that editing is canceled when no feedback requested and successful stop includes (successful) cancel.
+     * @memberOf CellEditor.prototype
+     */
+    stopEditing: function(feedback) {
+        /**
+         * @type {boolean|string|Error}
+         */
+        var error = this.validateEditorValue();
+
+        if (!error) {
+            try {
+                var value = this.getEditorValue();
+            } catch (err) {
+                error = err;
+            }
+        }
+
+        if (!error && this.grid.fireSyntheticEditorDataChangeEvent(this, this.initialValue, value)) {
+            try {
+                this.saveEditorValue(value);
+            } catch (err) {
+                error = err;
+            }
+        }
+
+        if (!error) {
+            this.hideEditor();
+            this.grid.cellEditor = null;
+            this.el.remove();
+        } else if (feedback >= 0) { // never true when `feedback` undefined
+            var point = this.event.gridCell;
+            this.grid.selectViewportCell(point.x, point.y - this.grid.getHeaderRowCount());
+            this.errorEffectBegin(++this.errors % feedback === 0 && error);
+        } else { // invalid but no feedback
+            this.cancelEditing();
+        }
+
+        //// [MFS] Release DataWriteLock (Release no matter what)
+        this.releaseDataWriteLock && this.releaseDataWriteLock();
+
+        return !error;
+    },
+
+    /** @summary Cancels editing.
+     * @returns {boolean} Successful. (Cancel is always successful.)
+     */
+    cancelEditing: function() {
+        this.setEditorValue(this.initialValue);
+        this.hideEditor();
+        this.grid.cellEditor = null;
+        this.el.remove();
+
+        return true;
+    },
 
     /**
+     * Calls the effect function indicated in the {@link CellEditor#errorEffect|errorEffect} property which triggers a series of CSS transitions.
+     * @param {boolean|string|Error} [error] - If defined, call the {@link CellEditor#errorEffectEnd|errorEffectEnd} method at the end of the last effect transition with this error.
      * @memberOf CellEditor.prototype
-     * @desc stop editing
      */
-    stopEditing: function () {
-        // [MFS]
-        if (!this.isEditing) {
-            return;
-        }
-        var proceed = this.grid.fireSyntheticEditorDataChangeEvent(this, this.initialValue, this.getEditorValue, this);
-        if (!proceed) {
-            return;
-        }
-        this.saveEditorValue();
-        this.isEditing = false;
-        this.hideEditor();
-        //// [MFS] Release DataWriteLock
-        this.releaseDataWriteLock && this.releaseDataWriteLock();
-    },    
+    errorEffectBegin: function(error) {
+        var options = { callback: error && this.errorEffectEnd.bind(this, error) },
+            effect = this.errorEffect;
 
-    cancelEditing: function () {
-        // [MFS]
-        if (!this.isEditing) {
-            return;
+        if (typeof effect === 'string') {
+            effect = this.errorEffects[effect];
         }
-        this.isEditing = false;
-        this.hideEditor();
-        //// [MFS] Release DataWriteLock
-        this.releaseDataWriteLock && this.releaseDataWriteLock();
+
+        if (typeof effect === 'object') {
+            _(options).extendOwn(effect.options);
+            effect = effect.effector;
+        }
+
+        if (typeof effect === 'function') {
+            effect.call(this, options);
+        } else {
+            throw 'Expected `this.errorEffect` to resolve to an error effect function.';
+        }
+    },
+
+    /**
+     * This function expects to be passed an error. There is no point in calling this function if there is no error. Nevertheless, if called with a falsy `error`, returns without doing anything.
+     * @this {CellEditor}
+     * @param {boolean|string|Error} [error]
+     */
+    errorEffectEnd: function(error) {
+        if (error) {
+            var msg =
+                'Invalid value. To resolve, do one of the following:\n\n' +
+                '   * Correct the error and try again.\n' +
+                '         - or -\n' +
+                '   * Cancel editing by pressing the "esc" (escape) key.';
+
+            error = error.message || error;
+
+            if (typeof error !== 'string') {
+                error = '';
+            }
+
+            if (this.localizer.expectation) {
+                error = error ? error + '\n' + this.localizer.expectation : this.localizer.expectation;
+            }
+
+            if (error) {
+                if (/[\n\r]/.test(error)) {
+                    error = '\n' + error;
+                    error = error.replace(/[\n\r]+/g, '\n\n   * ');
+                }
+                msg += '\n\nAdditional information about this error: ' + error;
+            }
+
+            alert(msg); // eslint-disable-line no-alert
+        }
+    },
+
+    /** @typedef effectObject
+     * @property {effectFunction} effector
+     * @property {object} [options] - An options object with which to call the function.
+     */
+    /**
+     * May be one of:
+     * * **string** - Name of registered error effect.
+     * * **effectFunction** - Reference to an effect function.
+     * * **effectObject** - Reference to an effectObject containing an {@link effectFunction} and an `options` object with which to call the function.
+     * @type {string|effectFunction|effectObject}
+     * @memberOf CellEditor.prototype
+     */
+    errorEffect: 'shaker',
+
+    /**
+     * Hash of registered {@link effectFunction}s or {@link effectObject}s.
+     * @memberOf CellEditor.prototype
+     */
+    errorEffects: {
+        shaker: effects.shaker,
+        glower: effects.glower
+    },
+
+    /**
+     * @desc save the new value into the behavior (model)
+     * @returns {boolean} Data changed and pre-cell-edit event was not canceled.
+     * @memberOf CellEditor.prototype
+     */
+    saveEditorValue: function(value) {
+        var save =
+            !(value && value === this.initialValue) && // data changed
+            this.grid.fireBeforeCellEdit(this.event.gridCell, this.initialValue, value, this); // proceed
+
+        if (save) {
+            this.grid.behavior.setValue(this.event, value);
+            this.grid.fireAfterCellEdit(this.event.gridCell, this.initialValue, value, this);
+        }
+
+        return save;
+    },
+
+    /**
+     * @summary Extract the edited value from the editor.
+     * @desc De-format the edited string back into a primitive value.
+     *
+     * The localizer's {@link localizerInterface#parse|parse} method will be called on the text box contents.
+     *
+     * Override this method if your editor has additional or alternative GUI elements. The GUI elements will influence the primitive value, either by altering the edited string before it is parsed, or by transforming the parsed value before returning it.
+     * @returns {object} the current editor's value
+     * @memberOf CellEditor.prototype
+     */
+    getEditorValue: function() {
+        return this.localizer.parse(this.input.value);
+    },
+
+    /**
+     * If there is no validator on the localizer, returns falsy (not invalid; possibly valid).
+     * @returns {boolean|string} Truthy value means invalid. If a string, this will be an error message. If not a string, it merely indicates a generic invalid result.
+     */
+    validateEditorValue: function() {
+        return this.localizer.invalid && this.localizer.invalid(this.input.value);
+    },
+
+    /**
+     * @summary Request focus for my input control.
+     * @desc See GRID-95 "Scrollbar moves inward" for issue and work-around explanation.
+     * @memberOf CellEditor.prototype
+     */
+    takeFocus: function() {
+        var el = this.el,
+            leftWas = el.style.left,
+            topWas = el.style.top;
+
+        el.style.left = el.style.top = 0; // work-around: move to upper left
+
+        var x = window.scrollX, y = window.scrollY;
+        this.input.focus();
+        window.scrollTo(x, y);
+        this.selectAll();
+
+        el.style.left = leftWas;
+        el.style.top = topWas;
     },
 
     /**
      * @memberOf CellEditor.prototype
-     * @desc save the new value into the behavior(model)
+     * @desc select everything
      */
-    saveEditorValue: function() {},
+    selectAll: nullPattern,
 
     /**
      * @memberOf CellEditor.prototype
-     * @desc return the current editor's value
+     * @desc set the bounds of my input control
+     * @param {rectangle} rectangle - the bounds to move to
      */
-    getEditorValue: function() {},
+    setBounds: function(cellBounds) {
+        var style = this.el.style;
+
+        style.left = px(cellBounds.x);
+        style.top = px(cellBounds.y);
+        style.width = px(cellBounds.width);
+        style.height = px(cellBounds.height);
+    },
 
     /**
-     * @memberOf CellEditor.prototype
-     * @desc request focus
-     */
-    takeFocus: function() {},
-
-
-    /**
-     * @memberOf CellEditor.prototype
      * @desc check that the editor is in the correct location, and is showing/hidden appropriately
+     * @memberOf CellEditor.prototype
      */
-    checkEditor: function () {
+    checkEditor: function() {
+        if (this.checkEditorPositionFlag) {
+            this.checkEditorPositionFlag = false;
+            if (this.event.isCellVisible) {
+                this.setEditorValue(this.initialValue);
+                this.attachEditor();
+                this.moveEditor();
+                this.showEditor();
+                this.takeFocus();
+            } else {
+                this.hideEditor();
+            }
+        }
+
         // [MFS]
         return new Promise((resolve, reject) => {
             resolve(null);
         });
     },
 
-    /** @deprecated Use `.grid` property instead. */
-    getGrid: function() {
-        return this.deprecated('grid', { since: '0.2' });
+    attachEditor: function() {
+        this.grid.div.appendChild(this.el);
     },
 
-    template: function() {
-        /*
-
-         */
-    },
-
-    getHTML: function() {
-        var template = this.template.toString().match(extract)[1];
-        return mustache.render(template, this);
-    },
+    template: ''
 
 });
+
+function nullPattern() {}
+function px(n) { return n + 'px'; }
+
+
+CellEditor.abstract = true; // don't instantiate directly
+
 
 module.exports = CellEditor;

@@ -1,27 +1,28 @@
 'use strict';
 
-var Feature = require('./Feature.js');
+var Feature = require('./Feature');
 
 /**
  * @constructor
+ * @extends Feature
  */
 var ColumnSorting = Feature.extend('ColumnSorting', {
 
-    alias: 'ColumnSorting',
-
     /**
      * @memberOf ColumnSorting.prototype
-     * @desc Handle this event down the feature chain of responsibility.
      * @param {Hypergrid} grid
      * @param {Object} event - the event details
      */
 
     // [MFS] handleDoubleClick => handleTap
     handleTap: function(grid, event) {
-        var gridCell = event.gridCell;
-        if (grid.isShowHeaderRow() && gridCell.y === 0 && gridCell.x !== -1) {
-            var keys = event.primitiveEvent.detail.keys;
-            grid.toggleSort(gridCell.x, keys);
+        var columnProperties;
+        if (
+            event.isHeaderCell &&
+            (columnProperties = grid.behavior.getColumnProperties(event.gridCell.x)) &&
+            !columnProperties.unsortable
+        ) {
+            grid.fireSyntheticColumnSortEvent(event.gridCell.x, event.primitiveEvent.detail.keys);
         } else if (this.next) {
             this.next.handleTap(grid, event);
         }
@@ -29,13 +30,17 @@ var ColumnSorting = Feature.extend('ColumnSorting', {
 
     /**
      * @memberOf ColumnSorting.prototype
-     * @desc * @desc Handle this event down the feature chain of responsibility.
      * @param {Hypergrid} grid
      * @param {Object} event - the event details
      */
     handleMouseMove: function(grid, event) {
-        var y = event.gridCell.y;
-        if (this.isFixedRow(grid, event) && y < 1) {
+        var columnProperties;
+        if (
+            event.isRowFixed &&
+            event.isHeaderCell &&
+            (columnProperties = grid.behavior.getColumnProperties(event.gridCell.x)) &&
+            !columnProperties.unsortable
+        ) {
             this.cursor = 'pointer';
         } else {
             this.cursor = null;

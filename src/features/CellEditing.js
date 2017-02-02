@@ -1,60 +1,77 @@
 'use strict';
 
-var Feature = require('./Feature.js');
+var Feature = require('./Feature');
+var CellEditor = require('../cellEditors/CellEditor');
 
 /**
  * @constructor
+ * @extends Feature
  */
 var CellEditing = Feature.extend('CellEditing', {
 
-    alias: 'CellEditing',
-
     /**
      * @memberOf CellEditing.prototype
-     * @desc handle this event down the feature chain of responsibility
      * @param {Hypergrid} grid
      * @param {Object} event - the event details
      */
     handleDoubleClick: function(grid, event) {
-        var isDoubleClickEditorActivation = grid.resolveProperty('editOnDoubleClick');
-        if (this.checkActivateEditor(grid, event, isDoubleClickEditorActivation)) {
-            grid._activateEditor(event);
+        if (
+            grid.properties.editOnDoubleClick &&
+            event.isGridCell
+        ) {
+            grid.onEditorActivate(event);
         } else if (this.next) {
             this.next.handleDoubleClick(grid, event);
         }
     },
 
-    handleTap: function(grid, event) {
-        var isDoubleClickEditorActivation = grid.resolveProperty('editOnDoubleClick');
-        if (this.checkActivateEditor(grid, event, !isDoubleClickEditorActivation)) {
-            grid._activateEditor(event);
+    handleClick: function(grid, event) {
+        if (
+            !grid.properties.editOnDoubleClick &&
+            event.isGridCell
+        ) {
+            grid.onEditorActivate(event);
         } else if (this.next) {
-            this.next.handleTap(grid, event);
+            this.next.handleClick(grid, event);
         }
     },
 
     /**
-     * @memberOf CellEditing.prototype
-     * @desc handle this event down the feature chain of responsibility
      * @param {Hypergrid} grid
      * @param {Object} event - the event details
+     * @memberOf KeyPaging.prototype
      */
-    handleHoldPulse: function(grid, event) {
-        var isDoubleClickEditorActivation = grid.resolveProperty('editOnDoubleClick');
-        if (this.checkActivateEditor(grid, event, !isDoubleClickEditorActivation)) {
-           grid._activateEditor(event);
-        } else if (this.next) {
-            this.next.handleHoldPulse(grid, event);
-        }
-    },
+    handleKeyDown: function(grid, event) {
+        var char, isVisibleChar, isDeleteChar, currentCell, editor;
 
-    checkActivateEditor: function(grid, event, isDoubleClickEditorActivation) {
-        var headerRowCount = grid.behavior.getHeaderRowCount();
-        var headerColumnCount = grid.behavior.getHeaderColumnCount();
-        var gridCell = event.gridCell;
-        var isFilterRow = grid.isFilterRow(gridCell.y);
-        var activateEditor = isDoubleClickEditorActivation && gridCell.x >= headerColumnCount && (isFilterRow || gridCell.y >= headerRowCount);
-        return activateEditor;
+        if (
+            grid.properties.editOnKeydown &&
+            !grid.cellEditor &&
+            (
+                (char = event.detail.char) === 'F2' ||
+                (isVisibleChar = char.length === 1 && !(event.detail.meta || event.detail.ctrl)) ||
+                (isDeleteChar = char === 'DELETE' || char === 'BACKSPACE')
+            )
+        ) {
+            currentCell = grid.selectionModel.getLastSelection();
+            if (currentCell) {
+                var pseudoEvent = new grid.behavior.CellEvent(currentCell.origin.x,
+                    currentCell.origin.y + grid.behavior.getHeaderRowCount());
+
+                editor = grid.onEditorActivate(pseudoEvent);
+
+                if (editor instanceof CellEditor) {
+                    if (isVisibleChar) {
+                        editor.input.value = char;
+                    } else if (isDeleteChar) {
+                        editor.setEditorValue('');
+                    }
+                    event.detail.primitiveEvent.preventDefault();
+                }
+            }
+        } else if (this.next) {
+            this.next.handleKeyDown(grid, event);
+        }
     }
 
 });

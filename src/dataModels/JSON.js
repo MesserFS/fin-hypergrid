@@ -1,111 +1,120 @@
 'use strict';
 
-//var analytics = require('hyper-analytics');
-//var analytics = require('../local_node_modules/hyper-analytics');
-var analytics = require('../local_node_modules/finanalytics');
 var DataModel = require('./DataModel');
-var images = require('../../images');
+var DataSourceOrigin = require('../dataSources/DataSourceOrigin');
 
-var UPWARDS_BLACK_ARROW = '\u25b2', // aka '▲'
-    DOWNWARDS_BLACK_ARROW = '\u25bc'; // aka '▼'
+/** @typedef {object} dataSourcePipelineObject
+ * @property {string} type - A "DataSourceOrigin" style constructor name.
+ * @property {*} [options] - When defined, passed as 2nd argument to constructor.
+ * @property {string} [parent] - Defines a branch off the main sequence.
+ */
 
-var nullDataSource = {
-    isNullObject: function() {
-        return true;
-    },
-    getFields: function() {
-        return [];
-    },
-    getHeaders: function() {
-        return [];
-    },
-    getColumnCount: function() {
-        return 0;
-    },
-    getRowCount: function() {
-        return 0;
-    },
-    getAggregateTotals: function() {
-        return [];
-    },
-    hasAggregates: function() {
-        return false;
-    },
-    hasGroups: function() {
-        return false;
-    },
-    getRow: function() {
-        return null;
+/**
+ * @implements dataSourceHelperAPI
+ * @desc This is a simple "null" helper API implementation with only a null `properties` method is defined.
+ * @see {@link http://c2.com/cgi/wiki?NullObject}
+ * @memberOf dataModels.JSON
+ * @inner
+ */
+var nullDataSourceHelperAPI = {
+    properties: function(properties) {
+        var result,
+            isGetter = 'getPropName' in properties;
+
+        if (isGetter) {
+            // All props are undefined in this null API regardless of their name; and
+            // undefined props return `null` as per interface definition.
+            result = null;
+        }
+
+        return result;
     }
 };
 
 /**
  * @name dataModels.JSON
  * @constructor
+ * @extends DataModel
  */
 var JSON = DataModel.extend('dataModels.JSON', {
 
-    //null object pattern for the source object
-    source: nullDataSource,
-
-    preglobalfilter: nullDataSource,
-    prefilter: nullDataSource,
-
-    presorter: nullDataSource,
-    analytics: nullDataSource,
-    postglobalfilter: nullDataSource,
-    postfilter: nullDataSource,
-    postsorter: nullDataSource,
-
-    topTotals: [],
-    bottomTotals: [],
-
-    initialize: function() {
-        this.selectedData = [];
+    initialize: function(grid, options) {
+        this.reset(options);
     },
+
+    /**
+     * Override to use a different origin.
+     * @type(DataSourceBase}
+     */
+    DataSourceOrigin: DataSourceOrigin,
+
+    /**
+     * @type {dataSourcePipelineObject[][]}
+     * @summary Pipeline stash push-down list.
+     * @desc The pipeline stash may be shared or instanced. This is the shared stash. An instance may override this with an instance stash variable (of the same name). See {@link dataModels.JSON.prototype#getPipelineSchemaStash}.
+     * @memberOf dataModels.JSON.prototype
+     */
+    pipelineSchemaStash: [],
+
+    /**
+     * @memberOf dataModels.JSON.prototype
+     * @param {object} [options]
+     */
+    reset: function(options) {
+        this.selectedData = [];
+
+        /**
+         * @summary Hash of data source helper APIs.
+         * @desc Keyed by data source type. An API is required by data sources with an `api` property.
+         * @see {@link dataModels.JSON/updateDataSources}
+         * @type {object}
+         */
+        this.api = {};
+
+        delete this.pipelineSchemaStash; // remove existing "own" version if any
+
+        this.source = new this.DataSourceOrigin(options.data, options.schema);
+
+        this.setPipeline();
+        //Register Defaults
+        this.registerHelperAPI('filter');
+        this.registerHelperAPI('sorter');
+    },
+
+    /**
+     * @summary The default data sources for a new pipeline when none are give.
+     * @desc For now Filtering is hardcoded in the grid.
+     * In the future, this will likely be empty (unless overridden by application developer for his own purposes).
+     * @type {pipelineSchema}
+     * @memberOf dataModels.JSON.prototype
+     */
+    defaultPipelineSchema: [],
 
     clearSelectedData: function() {
         this.selectedData.length = 0;
     },
 
     /**
-     * @memberOf dataModels.JSON.prototype
-     * @returns {boolean}
+     * @deprecated As of v1.0.7, reference the `dataSource` property instead.
+     * @returns {*}
      */
-    hasAggregates: function() {
-        return this.analytics.hasAggregates();
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @returns {boolean}
-     */
-    hasGroups: function() {
-        return this.analytics.hasGroups();
-    },
-
     getDataSource: function() {
-        return this.postsorter; //this.hasAggregates() ? this.analytics : this.presorter;
-    },
-
-    getFilterSource: function() {
-        return this.postfilter; //this.hasAggregates() ? this.postfilter : this.prefilter;
-    },
-
-    getGlobalFilterSource: function() {
-        return this.postglobalfilter; //this.hasAggregates() ? this.postfilter : this.prefilter;
-    },
-
-    getSortingSource: function() {
-        return this.postsorter; //this.hasAggregates() ? this.postsorter : this.presorter;
+        return this.deprecated('getDataSource()', 'dataSource', '1.0.7');
     },
 
     getData: function() {
         return this.source.data;
     },
 
+    /**
+     * @deprecated As of v1.1.0, use getIndexedData
+     */
     getFilteredData: function() {
-        var ds = this.getDataSource();
+        return this.deprecated('getFilteredData()', 'getIndexedData()', '1.2.0', arguments);
+    },
+
+    getIndexedData: function() {
+        var ds = this.dataSource;
         var count = ds.getRowCount();
         var result = new Array(count);
         for (var y = 0; y < count; y++) {
@@ -115,186 +124,55 @@ var JSON = DataModel.extend('dataModels.JSON', {
     },
 
     /**
+     * @param {number} x - Data column coordinate.
+     * @param {number} y - Data row coordinate.
      * @memberOf dataModels.JSON.prototype
-     * @param {number} x
-     * @param {number} y
-     * @returns {*}
      */
     getValue: function(x, y) {
-        var hasHierarchyColumn = this.hasHierarchyColumn();
-        var headerRowCount = this.grid.getHeaderRowCount();
-        var value;
-        if (hasHierarchyColumn) {
+        if (this.hasHierarchyColumn()) {
             if (x === -2) {
                 x = 0;
             }
-        } else if (this.hasAggregates()) {
+        } else if (this.isDrillDown()) {
             x += 1;
         }
-        if (y < headerRowCount) {
-            value = this.getHeaderRowValue(x, y);
-            return value;
-        }
-        // if (hasHierarchyColumn) {
-        //     y += 1;
-        // }
-        value = this.getDataSource().getValue(x, y - headerRowCount);
-        return value;
+        return this.dataSource.getValue(x, y);
     },
 
     /**
-     * @memberOf dataModels.JSON.prototype
-     * @param {number} x
-     * @param {number} y - negative values refer to _bottom totals_ rows
+     * @param {number} y - Data row coordinate.
      * @returns {*}
      */
-    getHeaderRowValue: function(x, y) {
-        var value;
-        if (y === undefined) {
-            value = this.getHeaders()[Math.max(x, 0)];
-        } else if (y < 0) { // bottom totals rows
-            var bottomTotals = this.getBottomTotals();
-            value = bottomTotals[bottomTotals.length + y][x];
-        } else {
-            var isFilterRow = this.grid.isShowFilterRow(),
-                isHeaderRow = this.grid.isShowHeaderRow(),
-                topTotalsOffset = (isFilterRow ? 1 : 0) + (isHeaderRow ? 1 : 0);
-            if (y >= topTotalsOffset) { // top totals rows
-                value = this.getTopTotals()[y - topTotalsOffset][x];
-            } else if (isHeaderRow && y === 0) {
-                value = this.getHeaders()[x];
-                var sortString = this.getSortImageForColumn(x);
-                if (sortString) { value = sortString + value; }
-            } else { // must be filter row
-                value = this.getFilter(x);
-                var icon = images.filter(value.length);
-                return [null, value, icon];
-            }
-        }
-        return value;
+    getDataIndex: function(y) {
+        return this.dataSource.getDataIndex(y);
     },
 
     /**
      * @memberOf dataModels.JSON.prototype
-     * @param {number} x
-     * @param {number} y
+     * @param {number} x - Data column coordinate.
+     * @param {number} r - Grid row coordinate.
      * @param value
      */
-    setValue: function(x, y, value) {
-        var hasHierarchyColumn = this.hasHierarchyColumn();
-        var headerRowCount = this.grid.getHeaderRowCount();
-        if (hasHierarchyColumn) {
+    setValue: function(x, r, value) {
+        if (this.hasHierarchyColumn()) {
             if (x === -2) {
                 x = 0;
             }
-        } else if (this.hasAggregates()) {
+        } else if (this.isDrillDown()) {
             x += 1;
         }
-        if (y < headerRowCount) {
-            this.setHeaderRowValue(x, y, value);
-        } else {
-            this.getDataSource().setValue(x, y - headerRowCount, value);
-        }
-        this.changed();
+        this.dataSource.setValue(x, r, value);
     },
 
     /**
+     * @deprecated As of v1.1.0, use `this.grid.behavior.getColumnProperties(x)` instead.
      * @memberOf dataModels.JSON.prototype
-     * @param {number} x
-     * @param {number} y
-     * @param value
+     * @param {number} x - Data column coordinate.
      * @returns {*}
      */
-    setHeaderRowValue: function(x, y, value) {
-        if (value === undefined) {
-            return this._setHeader(x, y); // y is really the value
-        }
-        var isFilterRow = this.grid.isShowFilterRow();
-        var isHeaderRow = this.grid.isShowHeaderRow();
-        var isBoth = isFilterRow && isHeaderRow;
-        var topTotalsOffset = (isFilterRow ? 1 : 0) + (isHeaderRow ? 1 : 0);
-        if (y >= topTotalsOffset) {
-            this.getTopTotals()[y - topTotalsOffset][x] = value;
-        } else if (x === -1) {
-            return; // can't change the row numbers
-        } else if (isBoth) {
-            if (y === 0) {
-                return this._setHeader(x, value);
-            } else {
-                this.setFilter(x, value);
-            }
-        } else if (isFilterRow) {
-            this.setFilter(x, value);
-        } else {
-            return this._setHeader(x, value);
-        }
-        return '';
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @param {number} colIndex
-     * @returns {*}
-     */
-    getColumnProperties: function(colIndex) {
+    getColumnProperties: function(x) {
         //access directly because we want it ordered
-        var column = this.grid.behavior.allColumns[colIndex];
-        if (column) {
-            return column.getProperties();
-        }
-        return undefined;
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @param {number} colIndex
-     * @returns {string} The text to filter on for this column.
-     */
-    getFilter: function(colIndex) {
-        var filter, columnProperties;
-
-        if ((columnProperties = this.getColumnProperties(colIndex))) {
-            filter = columnProperties.filter;
-        }
-
-        return filter || '';
-    },
-
-    /** @typedef {function} rowFilterFunction
-     * @param {function|*} data - Data to test (or function to call to get data to test) to see if it qualifies for the result set.
-     * @returns {boolean} Row qualifies for the result set (passes through filter).
-     */
-    /**
-     * @param {number} colIndex
-     * @returns {undefined|rowFilterFunction} row filtering function
-     */
-    getComplexFilter: function(colIndex) {
-        var rowFilter, columnProperties, filter, filterObject, newFilter;
-
-        if (
-            (columnProperties = this.getColumnProperties(colIndex)) &&
-            (filter = columnProperties.complexFilter) &&
-            (filterObject = this.grid.filter) &&
-            (newFilter = filterObject.create(filter.state))
-        ) {
-            rowFilter = function(data) {
-                var transformed = valueOrFunctionExecute(data);
-                return newFilter(transformed);
-            };
-        }
-
-        return rowFilter;
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @param {number} colIndex
-     * @param value
-     */
-    setFilter: function(colIndex, value) {
-        var columnProperties = this.getColumnProperties(colIndex);
-        columnProperties.filter = value;
-        this.applyAnalytics();
+        return this.deprecated('getColumnProperties(x)', 'grid.behavior.getColumnProperties(x)', '1.2.0', arguments);
     },
 
     /**
@@ -302,10 +180,9 @@ var JSON = DataModel.extend('dataModels.JSON', {
      * @returns {number}
      */
     getColumnCount: function() {
-        var showTree = this.grid.resolveProperty('showTreeColumn') === true;
-        var hasAggregates = this.hasAggregates();
-        var offset = (hasAggregates && !showTree) ? -1 : 0;
-        return this.analytics.getColumnCount() + offset;
+        var showTree = this.grid.properties.showTreeColumn === true;
+        var offset = (this.isDrillDown() && !showTree) ? -1 : 0;
+        return this.dataSource.getColumnCount() + offset;
     },
 
     /**
@@ -313,9 +190,7 @@ var JSON = DataModel.extend('dataModels.JSON', {
      * @returns {number}
      */
     getRowCount: function() {
-        var count = this.getDataSource().getRowCount();
-        count += this.grid.getHeaderRowCount();
-        return count;
+        return this.dataSource.getRowCount();
     },
 
     /**
@@ -323,7 +198,7 @@ var JSON = DataModel.extend('dataModels.JSON', {
      * @returns {string[]}
      */
     getHeaders: function() {
-        return this.analytics.getHeaders();
+        return getSchemaPropArr.call(this, 'header', 'getHeaders');
     },
 
     /**
@@ -331,7 +206,7 @@ var JSON = DataModel.extend('dataModels.JSON', {
      * @param {string[]} headers
      */
     setHeaders: function(headers) {
-        this.getDataSource().setHeaders(headers);
+        this.dataSource.setHeaders(headers);
     },
 
     /**
@@ -339,7 +214,7 @@ var JSON = DataModel.extend('dataModels.JSON', {
      * @param {string[]} fields
      */
     setFields: function(fields) {
-        this.getDataSource().setFields(fields);
+        this.dataSource.setFields(fields);
     },
 
     /**
@@ -347,122 +222,264 @@ var JSON = DataModel.extend('dataModels.JSON', {
      * @returns {string[]}
      */
     getFields: function() {
-        return this.getDataSource().getFields();
+        return getSchemaPropArr.call(this, 'name', 'getFields');
     },
 
     /**
      * @memberOf dataModels.JSON.prototype
-     * @param {object[]} dataRows
+     * @returns {string[]}
      */
-    setData: function(dataRows) {
-        this.source = new analytics.JSDataSource(dataRows);
-        //this.preglobalfilter = new analytics.DataSourceGlobalFilter(this.source);
-        //this.prefilter = new analytics.DataSourceFilter(this.preglobalfilter);
-        //this.presorter = new analytics.DataSourceSorterComposite(this.prefilter);
-
-        this.analytics = new analytics.DataSourceAggregator(this.source);
-
-        this.postglobalfilter = new analytics.DataSourceGlobalFilter(this.analytics);
-        this.postfilter = new analytics.DataSourceFilter(this.postglobalfilter);
-        this.postsorter = new analytics.DataSourceSorterComposite(this.postfilter);
-
-        this.applyAnalytics();
-
+    getCalculators: function() {
+        return getSchemaPropArr.call(this, 'calculator', 'getCalculators');
     },
 
     /**
      * @memberOf dataModels.JSON.prototype
-     * @param {Array<Array>} totalRows
      */
-    setTopTotals: function(totalRows) {
-        this.topTotals = totalRows;
+    reindex: function(options) {
+        selectedDataRowsBackingSelectedGridRows.call(this);
+
+        this.pipeline.forEach(function(dataSource) {
+            if (dataSource) {
+                if (dataSource.apply) {
+                    dataSource.apply(options);
+                }
+            }
+        });
+
+        reselectGridRowsBackedBySelectedDataRows.call(this);
     },
 
     /**
+     * @summary Set or reset grid data.
+     * See {@link DataSourceOrigin#setData} for details.
      * @memberOf dataModels.JSON.prototype
-     * @returns {Array<Array>}
      */
-    getTopTotals: function() {
-        return this.hasAggregates() ? this.getDataSource().getGrandTotals() : this.topTotals;
+    setData: function(dataSource, schema) {
+        this.source.setData(dataSource, schema);
     },
 
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @param {Array<Array>} totalRows
+    /** @typedef pipelineSchema
+     * @type {DataSourceBase[]}
+     * @summary Describes a new pipeline.
+     * @desc Consists of an ordered list of data source constructors, descendants of `DataSourceBase`.
+     * May contain `undefined` elements, which are ignored.
      */
-    setBottomTotals: function(totalRows) {
-        this.bottomTotals = totalRows;
-    },
 
     /**
+     * @summary Instantiates the data source pipeline.
+     * @desc Each new pipe is created from the list of supplied constructors, each taking a reference to the previous data source in the pipeline.
+     *
+     * A reference to each new pipe is added to `this.sources` dataModel using the pipe's derived name.
+     *
+     * Will clear out any filtering and sorting state.
+     *
+     * The last pipe is assigned the synonym `this.dataSource`.
+     * @param {pipelineSchema} [DataSources] - New pipeline description. If not given, uses the default {@link dataModels.JSON#DataSources|this.defaultPipelineSchema}.
+     * @param {object} [options] - Takes first argument position when `DataSources` omitted.
+     * @param {string} [options.stash] - See {@link dataModels.JSON.prototype#getPipelineSchemaStash}. If given, saves the currently defined pipeline onto the indicated stash stack and then resets it with the given `DataSources`.
      * @memberOf dataModels.JSON.prototype
-     * @returns {Array<Array>}
      */
-    getBottomTotals: function() {
-        return this.hasAggregates() ? this.getDataSource().getGrandTotals() : this.bottomTotals;
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @param groups
-     */
-    setGroups: function(groups) {
-        this.analytics.setGroupBys(groups);
-        this.applyAnalytics();
-        this.grid.fireSyntheticGroupsChangedEvent(this.getGroups());
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @returns {object[]}
-     */
-    getGroups: function() {
-        var headers = this.getHeaders().slice(0);
-        var fields = this.getFields().slice(0);
-        var groupBys = this.analytics.groupBys;
-        var groups = [];
-        for (var i = 0; i < groupBys.length; i++) {
-            var field = headers[groupBys[i]];
-            groups.push({
-                id: groupBys[i],
-                label: field,
-                field: fields
-            });
+    setPipeline: function(DataSources, options) {
+        if (!Array.isArray(DataSources)) {
+            options = DataSources;
+            DataSources = undefined;
         }
-        return groups;
+
+        if (options && options.stash) {
+            this.getPipelineSchemaStash(options.stash).push(this.DataSources);
+        }
+
+        var dataSource = this.source;
+
+        /**
+         * @summary Currently defined pipeline.
+         * @desc Each instance has its own pipeline.
+         * (Pipelines cannot be shared because they contain indexes specific to the data in the grid.)
+         * @name pipeline
+         * @type {dataSourcePipelineObject[]}
+         * @memberOf dataModels.JSON.prototype
+         */
+        this.pipeline = [];
+
+        DataSources = DataSources || this.defaultPipelineSchema;
+
+        DataSources.forEach(function(DataSource) {
+            if (DataSource) {
+                dataSource = new DataSource(dataSource);
+                this.pipeline.push(dataSource);
+
+                // Ensure a null helper API defined for all data sources that require one
+                if (dataSource.type && dataSource.set && !this.api[dataSource.type]) {
+                    this.registerHelperAPI(dataSource.type);
+                }
+            }
+        }, this);
+
+        this.updateDataSources();
+
+        this.dataSource = dataSource;
+
+        this.DataSources = DataSources;
     },
 
     /**
-     * @memberOf dataModels.JSON.prototype
-     * @returns {object[]}
+     * Find the last data source in the pipeline of specified type.
+     * @param {string} type
+     * @returns {DataSourceBase}
      */
-    getAvailableGroups: function() {
-        var headers = this.source.getHeaders().slice(0);
-        var groupBys = this.analytics.groupBys;
-        var groups = [];
-        for (var i = 0; i < headers.length; i++) {
-            if (groupBys.indexOf(i) === -1) {
-                var field = headers[i];
-                groups.push({
-                    id: i,
-                    label: field,
-                    field: field
-                });
+    findDataSourceByType: function(type) {
+        var dataSource;
+        for (var i = this.pipeline.length - 1; i >= 0; i--) {
+            dataSource = this.pipeline[i];
+            if (dataSource.type === type) {
+                return dataSource;
             }
         }
-        return groups;
+    },
+
+    /**
+     * @summary Update data sources with APIs of matching types.
+     * @desc Only updates _qualified_ data sources, which include:
+     * * those for which an API of the data source's type is defined in `this.api`; and
+     * * those that can accept an API (have an `api` property to set).
+     * @param {string} [type] - Type of data source to update. If omitted, updates all data sources.
+     * @returns {number|object} One of:
+     * `type` specified - The number of updated data sources of the specified type.
+     * `type` omitted - Hash containing the number of updated data sources by type.
+     */
+    updateDataSources: function(type) {
+        var results = {},
+            api = this.api;
+
+        this.pipeline.forEach(function(dataSource) {
+            if (
+                (!type || dataSource.type === type) &&
+                api[dataSource.type]
+            ) {
+                dataSource.set(api[dataSource.type]);
+                results[dataSource.type] = (results[dataSource.type] || 0) + 1;
+            }
+        });
+
+        return type ? results[type] : results;
+    },
+
+    /**
+     * @summary The pipeline stash currently in use (either shared or instance).
+     * @desc Instance stash is created here when requested and instance doesn't yet have its "own" version.
+     * @param {string} [whichStash] - One of:
+     * * `'shared'` - Use shared stash.
+     * * `'own'' or `'instance'` - Use instance stash, creating it if it does not exist.
+     * * `'default'` or `undefined` - Use instance stash if previously created; otherwise use shared stash.
+     * @returns The pipeline stash push-down list.
+     * @memberOf dataModels.JSON.prototype
+     */
+    getPipelineSchemaStash: function(whichStash) {
+        var stash;
+        switch (whichStash) {
+
+            case 'shared':
+                stash = DataModel.prototype.stash;
+                break;
+
+            case 'own':
+            case 'instance':
+                if (!this.hasOwnProperty('pipelineSchemaStash')) {
+                    this.pipelineSchemaStash = [];
+                }
+            // disable eslint no-fallthrough
+            case 'default':
+            case undefined:
+                stash = this.pipelineSchemaStash;
+                break;
+
+        }
+        return stash;
+    },
+
+    /**
+     * Pops the last stashed pipeline off the stash stack, making it the currently defined pipeline.
+     * @param {string} [whichStash] - See {@link dataModels.JSON.prototype#getPipelineSchemaStash}.
+     * @memberOf dataModels.JSON.prototype
+     */
+    unstashPipeline: function(whichStash) {
+        var pipelineSchemaStash = this.getPipelineSchemaStash(whichStash);
+        if (pipelineSchemaStash.length) {
+            this.setPipeline(pipelineSchemaStash.pop());
+        }
+    },
+
+    /**
+     * @deprecated
+     * @param {number} [newLength=0]
+     * @memberOf dataModels.JSON.prototype
+     */
+    truncatePipeline: function(newLength) {
+        return this.deprecated('truncatePipeline(newLength)', 'setPipeline()', '1.2.0', arguments, 'Build a local pipeline (array of data source constructors) and pass it to setPipeline.');
+    },
+
+    isDrillDown: function(event) {
+        var colIndex = event && event.gridCell && event.gridCell.x;
+        return this.dataSource.isDrillDown(colIndex);
+    },
+
+    /**
+     * @deprecated
+     * @summary Set the top total row(s).
+     * @param {dataRowObject[]} totalRows - Array of 0 or more rows containing summary data. Omit to set to empty array.
+     * @memberOf dataModels.JSON.prototype
+     */
+    setTopTotals: function(totalRows) {
+        return this.deprecate('setTopTotals(rows)', 'grid.behavior.setTopTotals(rows)', '1.1.0', arguments);
+    },
+
+    /**
+     * @deprecated
+     * @summary Get the top total row(s).
+     * @returns {dataRowObject[]}
+     * @memberOf dataModels.JSON.prototype
+     */
+    getTopTotals: function() {
+        return this.deprecate('getTopTotals(rows)', 'grid.behavior.getTopTotals(rows)', '1.1.0', arguments);
+    },
+
+    /**
+     * @deprecated
+     * @summary Set the bottom total row(s).
+     * @param {dataRowObject[]} totalRows - Array of 0 or more rows containing summary data. Omit to set to empty array.
+     * @memberOf dataModels.JSON.prototype
+     */
+    setBottomTotals: function(totalRows) {
+        return this.deprecate('setBottomTotals(rows)', 'grid.behavior.setBottomTotals(rows)', '1.1.0', arguments);
+    },
+
+    /**
+     * @deprecated
+     * @summary Get the bottom total row(s).
+     * @returns {dataRowObject[]}
+     * @memberOf dataModels.JSON.prototype
+     */
+    getBottomTotals: function() {
+        return this.deprecate('getBottomTotals(rows)', 'grid.behavior.getBottomTotals(rows)', '1.1.0', arguments);
     },
 
     /**
      * @memberOf dataModels.JSON.prototype
      * @returns {object[]}
      */
-    getVisibleColumns: function() {
-        var items = this.grid.behavior.columns;
-        items = items.filter(function(each) {
-            return each.label !== 'Tree';
+    getActiveColumns: function() {
+        return this.grid.behavior.columns.filter(function(column) {
+            return column.name !== 'tree';
         });
-        return items;
+    },
+
+    /**
+     * @deprecated As of v1.0.6, use `this.getActiveColumns` instead.
+     * @returns {*}
+     */
+    getVisibleColumns: function() {
+        return this.deprecated('getVisibleColumns()', 'getActiveColumns()', '1.0.6', arguments);
     },
 
     /**
@@ -479,281 +496,183 @@ var JSON = DataModel.extend('dataModels.JSON', {
             }
         }
         hidden.sort(function(a, b) {
-            return a.label < b.label;
+            return a.header < b.header;
         });
         return hidden;
     },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @param aggregations
-     */
-    setAggregates: function(aggregations) {
-        this.quietlySetAggregates(aggregations);
-        this.applyAnalytics();
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @param aggregations
-     */
-    quietlySetAggregates: function(aggregations) {
-        this.analytics.setAggregates(aggregations);
-    },
-
     /**
      * @memberOf dataModels.JSON.prototype
      * @returns {boolean}
      */
     hasHierarchyColumn: function() {
-        var showTree = this.grid.resolveProperty('showTreeColumn') === true;
-        return this.hasAggregates() && this.hasGroups() && showTree;
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     */
-    applyAnalytics: function(dontApplyGroupBysAndAggregations) {
-        selectedDataRowsBackingSelectedGridRows.call(this);
-
-        if (!dontApplyGroupBysAndAggregations) {
-            applyGroupBysAndAggregations.call(this);
-        }
-        applyFilters.call(this);
-        applySorts.call(this);
-
-        reselectGridRowsBackedBySelectedDataRows.call(this);
-    },
-
-    createFormattedFilter: function(formatter, filter) {
-        return function(value) {
-            var formattedValue = formatter(value);
-            return filter(formattedValue);
-        };
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @param {number} colIndex
-     * @param keys
-     */
-    toggleSort: function(colIndex, keys) {
-        this.incrementSortState(colIndex, keys);
-        this.applyAnalytics();
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     * @param {number} colIndex
-     * @param {string[]} keys
-     */
-    incrementSortState: function(colIndex, keys) {
-        colIndex++; //hack to get around 0 index
-        var state = this.getPrivateState();
-        var hasCTRL = keys.indexOf('CTRL') > -1;
-        state.sorts = state.sorts || [];
-        var already = state.sorts.indexOf(colIndex);
-        if (already === -1) {
-            already = state.sorts.indexOf(-1 * colIndex);
-        }
-        if (already > -1) {
-            if (state.sorts[already] > 0) {
-                state.sorts[already] = -1 * state.sorts[already];
-            } else {
-                state.sorts.splice(already, 1);
-            }
-        } else if (hasCTRL || state.sorts.length === 0) {
-            state.sorts.unshift(colIndex);
-        } else {
-            state.sorts.length = 0;
-            state.sorts.unshift(colIndex);
-        }
-        if (state.sorts.length > 3) {
-            state.sorts.length = 3;
-        }
+        var showTree = this.grid.properties.showTreeColumn === true;
+        return this.isDrillDown() && showTree;
     },
 
     /**
      * @memberOf dataModels.JSON.prototype
      * @param index
      * @param returnAsString
+     * @desc Provides the unicode character used to denote visually if a column is a sorted state
      * @returns {*}
      */
-    getSortImageForColumn: function(index) {
-        index++;
-        var up = true;
-        var sorts = this.getPrivateState().sorts;
-        if (!sorts) {
-            return null;
-        }
-        var position = sorts.indexOf(index);
-        if (position < 0) {
-            position = sorts.indexOf(-1 * index);
-            up = false;
-        }
-        if (position < 0) {
-            return null;
-        }
-        var rank = sorts.length - position;
-        var arrow = up ? UPWARDS_BLACK_ARROW : DOWNWARDS_BLACK_ARROW;
-        return rank + arrow + ' ';
+    getSortImageForColumn: function(columnIndex) {
+        //Not implemented
     },
 
     /**
-     * @memberOf dataModels.JSON.prototype
      * @param cell
      * @param event
-     */
-    cellClicked: function(cell, event) {
-        if (!this.hasAggregates()) {
-            return;
-        }
-        if (event.gridCell.x !== 0) {
-            return; // this wasn't a click on the hierarchy column
-        }
-        var headerRowCount = this.grid.getHeaderRowCount();
-        var y = event.gridCell.y - headerRowCount;
-        this.getDataSource().click(y);
-        this.applyAnalytics(true);
-        this.changed();
-    },
-
-    /**
+     * @return {boolean} Clicked in a drill-down column.
      * @memberOf dataModels.JSON.prototype
-     * @param {number} y
-     * @returns {object}
      */
-    getRow: function(y) {
-        var headerRowCount = this.grid.getHeaderRowCount();
-        if (y < headerRowCount && !this.hasAggregates()) {
-            var topTotals = this.getTopTotals();
-            return topTotals[y - (headerRowCount - topTotals.length)];
+    cellClicked: function(event) {
+        if (arguments.length === 2) {
+            return this.deprecated('cellClicked(cell, event)', 'cellClicked(event)', '1.2.0', arguments);
         }
-        return this.getDataSource().getRow(y - headerRowCount);
+        return this.toggleRow(event.dataCell.y);
     },
 
     /**
+     * @summary Toggle the drill-down control of a the specified row.
+     * @desc Operates only on the following rows:
+     * * Expandable rows - Rows with a drill-down control.
+     * * Revealed rows - Rows not hidden inside of collapsed drill-downs.
+     * @param y - Revealed row number. (This is not the row ID.)
+     * @param {boolean} [expand] - One of:
+     * * `true` - Expand row.
+     * * `false` - Collapse row.
+     * * `undefined` (or omitted) - Toggle state of row.
+     * @returns {boolean|undefined} Changed. Specifically, one of:
+     * * `undefined` row had no drill-down control
+     * * `true` drill-down changed
+     * * `false` drill-down unchanged (was already in requested state)
      * @memberOf dataModels.JSON.prototype
-     * @param {number} y
-     * @returns {object}
      */
-    buildRow: function(y) {
-        var colCount = this.getColumnCount();
-        var fields = [].concat(this.getFields());
-        var result = {};
-        if (this.hasAggregates()) {
-            result.tree = this.getValue(-2, y);
-            fields.shift();
+    toggleRow: function(y, expand) {
+        //TODO: fire a row toggle event
+        var changed;
+        if (this.isDrillDown()) {
+            changed = this.dataSource.click(y, expand);
+            if (changed) {
+                this.reindex({rowClick: true});
+                this.grid.behavior.changed();
+            }
         }
-        for (var i = 0; i < colCount; i++) {
-            result[fields[i]] = this.getValue(i, y);
-        }
-        return result;
+        return changed;
     },
 
     /**
+     * @param {number} r - Data row coordinate.
+     * @returns {object|undefined} Returns data row object or `undefined` if a header row.
      * @memberOf dataModels.JSON.prototype
-     * @param {number} y
-     * @returns {object}
      */
-    getComputedRow: function(y) {
-        var rcf = this.getRowContextFunction([y]);
-        var fields = this.getFields();
-        var row = {};
-        for (var i = 0; i < fields.length; i++) {
-            var field = fields[i];
-            row[field] = rcf(field)[0];
-        }
-        return row;
+    getRow: function(r) {
+        return this.dataSource.getRow(r);
     },
 
     /**
+     * @summary _Getter:_ Return the filter from the data model.
+     * @method
+     * @returns {dataSourceHelperAPI} The grid's currently assigned filter.
      * @memberOf dataModels.JSON.prototype
-     * @param {string} fieldName
-     * @param {number} y
-     * @returns {*}
      */
-    getValueByField: function(fieldName, y) {
-        var index = this.getFields().indexOf(fieldName);
-        if (this.hasAggregates()) {
-            y += 1;
-        }
-        return this.getDataSource().getValue(index, y);
+    get filter() {
+        return this.api.filter;
     },
 
     /**
+     * @summary _Setter:_ Assign a filter to the data model.
+     * @method
+     * @param {dataSourceHelperAPI|undefined|null} filter - One of:
+     * * A filter object - Turns the filter *ON*.
+     * * `undefined` or `null` - Turns the filter *OFF.*
      * @memberOf dataModels.JSON.prototype
-     * @param {sring} string
      */
-    setGlobalFilter: function(string) {
-        var globalFilterSource = this.getGlobalFilterSource();
-        if (!string || string.length === 0) {
-            globalFilterSource.clear();
-        } else {
-            globalFilterSource.set(textMatchFilter(string));
-        }
-        this.applyAnalytics();
+    set filter(filter) {
+        this.registerHelperAPI('filter', filter);
     },
-
     /**
+     * @summary _Getter_
+     * @method
+     * @returns {sorterAPI} The grid's currently assigned sorter.
      * @memberOf dataModels.JSON.prototype
-     * @param {object} config
-     * @param {number} x
-     * @param {number} y
-     * @param {number} untranslatedX
-     * @param {number} untranslatedY
-     * @returns {object}
      */
-    getCellRenderer: function(config, x, y, untranslatedX, untranslatedY) {
-        var renderer;
-        var provider = this.grid.getCellProvider();
-
-        config.x = x;
-        config.y = y;
-        config.untranslatedX = untranslatedX;
-        config.untranslatedY = untranslatedY;
-
-        renderer = provider.getCell(config);
-        renderer.config = config;
-
-        return renderer;
+    get sorter() {
+        return this.api.sorter;
     },
 
     /**
+     * @summary _Setter:_ Assign a sorter to the grid.
+     * @method
+     * @param {sorterAPI|undefined|null} sorter - One of:
+     * * A sorter object, turning sorting *ON*.
+     * * If `undefined` or `null`, the {@link dataModels.JSON~nullSorter|nullSorter} is reassigned to the grid, turning sorting *OFF.*
+     * @memberOf dataModels.JSON.prototype
+     */
+    set sorter(sorter) {
+        this.registerHelperAPI('sorter', sorter);
+    },
+
+    /**
+     * @summary Register the data source helper API.
+     * @desc The API is immediately applied to all data sources in the pipeline of the given type; and reassigned later whenever the pipeline is reset.
+     * @param {string} dataSourceType
+     * @param {dataSourceHelperAPI|undefined|null} helper - One of:
+     * * A filter object - Turns the data source *ON*.
+     * * `undefined` or `null` - Turns the data source *OFF.*
+     * * A helper API. Turns the data source *ON*.
+     */
+    registerHelperAPI: function(dataSourceType, helper) {
+        this.api[dataSourceType] = helper = helper || nullDataSourceHelperAPI;
+
+        if (typeof helper.properties === 'function' && helper.properties.length === 1) {
+            helper.prop = propPrep.bind(helper, this);
+        }
+
+        if (this.updateDataSources(dataSourceType)) {
+            this.reindex();
+        }
+    },
+
+    /**
+     * @deprecated As of v1.1.0, use `this.reindex` instead.
      * @memberOf dataModels.JSON.prototype
      */
     applyState: function() {
-        this.applyAnalytics();
-    },
-
-    /**
-     * @memberOf dataModels.JSON.prototype
-     */
-    reset: function() {
-        this.setData([]);
+        return this.deprecated('applyState()', 'reindex()', '1.2.0', arguments);
     },
 
     getUnfilteredValue: function(x, y) {
-        return this.source.getValue(x, y);
+        return this.deprecated('getUnfilteredValue(x, y)', null, '1.2.0', arguments, 'No longer supported');
     },
 
     getUnfilteredRowCount: function() {
-        return this.source.getRowCount();
+        return this.deprecated('getUnfilteredValue(x, y)', null, '1.2.0', arguments, 'No longer supported');
     },
 
+    /**
+     * @summary Add a new data row to the grid.
+     * @desc If data source pipeline in use, to see the new row in the grid, you must eventually call:
+     * ```javascript
+     * this.grid.behavior.reindex();
+     * this.grid.behaviorChanged();
+     * ```
+     * @param {object} newDataRow
+     * @returns {object} The new row object.
+     * @memberOf dataModels.JSON.prototype
+     */
+    addRow: function(newDataRow) {
+        this.getData().push(newDataRow);
+        return newDataRow;
+    },
+
+    get schema() { return this.source.schema; },
+
+    set schema(schema) {
+        this.source.setSchema(schema);
+    }
 });
-
-function valueOrFunctionExecute(valueOrFunction) {
-    return typeof valueOrFunction === 'function' ? valueOrFunction() : valueOrFunction;
-}
-
-function textMatchFilter(string) {
-    string = string.toLowerCase();
-    return function(each) {
-        each = valueOrFunctionExecute(each);
-        return (each + '').toLowerCase().indexOf(string) > -1;
-    };
-}
 
 // LOCAL METHODS -- to be called with `.call(this`
 
@@ -761,20 +680,21 @@ function textMatchFilter(string) {
  * Accumulate actual data row objects backing current grid row selections.
  * This call should be paired with a subsequent call to `reselectGridRowsBackedBySelectedDataRows`.
  * @private
+ * @this {dataModels.JSON}
  * @memberOf dataModels.JSON.prototype
  */
 function selectedDataRowsBackingSelectedGridRows() {
     var selectedData = this.selectedData,
         hasRowSelections = this.grid.selectionModel.hasRowSelections(),
-        needFilteredDataList = selectedData.length || hasRowSelections;
+        needIndexedDataList = selectedData.length || hasRowSelections;
 
-    if (needFilteredDataList) {
-        var filteredData = this.getFilteredData();
+    if (needIndexedDataList) {
+        var indexedData = this.getIndexedData();
     }
 
     // STEP 1: Remove any filtered data rows from the recently selected list.
     selectedData.forEach(function(dataRow, index) {
-        if (filteredData.indexOf(dataRow) >= 0) {
+        if (indexedData.indexOf(dataRow) >= 0) {
             delete selectedData[index];
         }
     });
@@ -782,7 +702,7 @@ function selectedDataRowsBackingSelectedGridRows() {
     // STEP 2: Accumulate the data rows backing any currently selected grid rows in `this.selectedData`.
     if (hasRowSelections) { // any current grid row selections?
         this.grid.getSelectedRows().forEach(function(selectedRowIndex) {
-            var dataRow = filteredData[selectedRowIndex];
+            var dataRow = indexedData[selectedRowIndex];
             if (selectedData.indexOf(dataRow) < 0) {
                 selectedData.push(dataRow);
             }
@@ -793,13 +713,14 @@ function selectedDataRowsBackingSelectedGridRows() {
 /**
  * Re-establish grid row selections based on actual data row objects accumulated by `selectedDataRowsBackingSelectedGridRows` which should be called first.
  * @private
+ * @this {dataModels.JSON}
  * @memberOf dataModels.JSON.prototype
  */
 function reselectGridRowsBackedBySelectedDataRows() {
     if (this.selectedData.length) { // any data row objects added from previous grid row selections?
         var selectionModel = this.grid.selectionModel,
             offset = this.grid.getHeaderRowCount(),
-            filteredData = this.getFilteredData();
+            filteredData = this.getIndexedData();
 
         selectionModel.clearRowSelection();
 
@@ -813,72 +734,117 @@ function reselectGridRowsBackedBySelectedDataRows() {
 }
 
 /**
- * @private
- * @memberOf dataModels.JSON.prototype
+ * @inner
+ * @summary Digests `(columnIndex, propName, value)` and calls `properties`.
+ * @desc Digests the three parameters `(columnIndex, propName, value)` detailed below, creating a single object with which it then calls the helper API `properties` method.
+ *
+ * A helper API `properties` method:
+ * * Supports two types of actions:
+ *   * **Getter** call where you supply just the property name. The method gets the property value from the API and returns it.
+ *   * **Setter** call where you supply a value along with the property name; or you supply a hash of property name/value pairs. The method sets the property on the API and returns nothing. All values are valid with the exception of `undefined` which deletes the property of the given name rather than setting it to `undefined`.
+ * * Supports two types of properties:
+ *   * **Global properties** affect the API globally.
+ *   * **Column properties** pertain to specific columns.
+ *
+ * This method is overloaded. The way it is called as explained in the Parameters section below determines both the type of action (getter, setter) and the kind of property (global, column).
+ *
+ * Note: Not all API properties are dynamic; some are static and updating them later will have no effect.
+ *
+ * @this {dataSourceHelperAPI}
+ *
+ * @param {DataSourceBase} dataModel - The data model. This parameter is bound to the call by {@link dataModels.JSON#setHelperAPI|setHelperAPI}.
+ *
+ * @param {number} [columnIndex] - If given, this is a property on a specific column. If omitted, this is a property on the whole API properties object.
+ *
+ * @param {string|object} property - _If `columnIndex` is omitted, this arg takes its place._
+ *
+ * One of these types:
+ * * **string** - Property name. The name of the explicit property to either get or (if `value` also given) set on the properties object.
+ * * **object** - Hash of properties to set on the properties object.
+ *
+ * @param [value] - _If `columnIndex` is omitted, this arg takes its place._
+ *
+ * One of:
+ * * Omitted (when `property` is a string), this is the "getter" action: Return the value from the properties object of the key in `property`.
+ * * When `property` is a string and `value` is given, this is the "setter" action: Copy this value to properties object using the key in `property`.
+ * * When `property` is a hash and `value` is given: Unexpected; throws an error.
+ *
+ * @returns {propObject}
  */
-function applyGroupBysAndAggregations() {
-    if (this.analytics.aggregates.length === 0) {
-        this.quietlySetAggregates({});
-    }
-    this.analytics.apply();
-}
+function propPrep(dataModel, columnIndex, propName, value) {
+    var invalid,
+        properties = {},
+        argCount = arguments.length;
 
-/**
- * @private
- * @memberOf dataModels.JSON.prototype
- */
-function applyFilters() {
-    var visibleColumns = this.getVisibleColumns();
-    this.getGlobalFilterSource().apply(visibleColumns);
-    var details = [];
-    var filterSource = this.getFilterSource();
-    var groupOffset = 0; //this.hasHierarchyColumn() ? 0 : 1;
-
-    // apply column filters
-    filterSource.clearAll();
-
-    visibleColumns.forEach(function(column) {
-        var columnIndex = column.index,
-            filterText = this.getFilter(columnIndex),
-            formatterType = column.getProperties().format,
-            formatter = this.grid.getFormatter(formatterType),
-            complexFilter = this.getComplexFilter(columnIndex),
-            filter = complexFilter || filterText.length > 0 && textMatchFilter(filterText);
-
-        if (filter) {
-            filterSource.add(columnIndex - groupOffset, this.createFormattedFilter(formatter, filter));
-            details.push({
-                column: column.label,
-                format: complexFilter ? 'complex' : formatterType
-            });
-        }
-    }.bind(this));
-
-    filterSource.applyAll();
-
-    this.grid.fireSyntheticFilterAppliedEvent({
-        details: details
-    });
-}
-
-/**
- * @private
- * @memberOf dataModels.JSON.prototype
- */
-function applySorts() {
-    var sortingSource = this.getSortingSource();
-    var sorts = this.getPrivateState().sorts;
-    var groupOffset = this.hasAggregates() ? 1 : 0;
-    if (!sorts || sorts.length === 0) {
-        sortingSource.clearSorts();
+    if (typeof columnIndex === 'number') {
+        argCount--;
     } else {
-        for (var i = 0; i < sorts.length; i++) {
-            var colIndex = Math.abs(sorts[i]) - 1;
-            var type = sorts[i] < 0 ? -1 : 1;
-            sortingSource.sortOn(colIndex - groupOffset, type);
-        }
+        value = propName;
+        propName = columnIndex;
+        columnIndex = undefined;
     }
-    sortingSource.applySorts();
+
+    switch (argCount) {
+
+        case 2: // getter propName name or setter hash
+            if (typeof propName === 'object') {
+                properties = propName;
+            } else {
+                properties.getPropName = propName;
+            }
+            break;
+
+        case 3: // setter for value
+            if (typeof propName !== 'string') {
+                invalid = true;
+            } else {
+                properties[propName] = value;
+            }
+            break;
+
+        default: // too few or too many args
+            invalid = true;
+
+    }
+
+    if (invalid) {
+        throw 'Invalid overload.';
+    }
+
+    if (columnIndex !== undefined) {
+        // non-enumerable propName:
+        Object.defineProperty(properties, 'column', {
+            value: {
+                index: columnIndex,
+                name: dataModel.source.schema[columnIndex].name
+            }
+        });
+    }
+
+    return this.properties(properties);
 }
+
+var warned = {};
+/**
+ * @private
+ * @param {string} propName
+ * @this DataSourceOrigin#
+ * @returns {*[]}
+ */
+function getSchemaPropArr(propName, deprecatedMethodName) {
+    if (!warned[deprecatedMethodName]) {
+        console.warn(deprecatedMethodName + '() has been deprecated as of v1.2.0 and will be removed in a future release. Constructs like ' + deprecatedMethodName + '()[i] should be changed to schema[i]. (This deprecated method now returns a new array derived from schema.)');
+        warned[deprecatedMethodName] = true;
+    }
+    return this.schema.map(function(columnSchema) {
+        return columnSchema[propName];
+    }, this);
+}
+
+/**
+ * @deprecated
+ * @memberOf dataModels.JSON.prototype
+ */
+JSON.prototype.applyAnalytics = JSON.prototype.reindex; // eslint-disable-line no-extend-native
 
 module.exports = JSON;

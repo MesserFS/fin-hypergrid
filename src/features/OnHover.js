@@ -1,32 +1,27 @@
 'use strict';
 
-var Feature = require('./Feature.js');
+var Feature = require('./Feature');
 
 /**
  * @constructor
  */
 var OnHover = Feature.extend('OnHover', {
 
-    alias: 'OnHover',
-
     /**
-     * @desc Hhandle this event down the feature chain of responsibility.
      * @param {Hypergrid} grid
      * @param {Object} event - the event details
      * @memberOf OnHover.prototype
      */
     handleMouseMove: function(grid, event) {
-        var currentHoverCell = grid.getHoverCell();
-        if (!event.gridCell.equals(currentHoverCell)) {
-            if (currentHoverCell) {
-                this.handleMouseExit(grid, currentHoverCell);
+        var hoverCell = grid.hoverCell;
+        if (!event.gridCell.equals(hoverCell)) {
+            if (hoverCell) {
+                this.handleMouseExit(grid, hoverCell);
             }
             this.handleMouseEnter(grid, event);
             grid.setHoverCell(event.gridCell);
-        } else {
-            if (this.next) {
-                this.next.handleMouseMove(grid, event);
-            }
+        } else if (this.next) {
+            this.next.handleMouseMove(grid, event);
         }
     }
 

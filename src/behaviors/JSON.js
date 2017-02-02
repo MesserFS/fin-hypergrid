@@ -1,34 +1,31 @@
 'use strict';
 
-var ListDragon = require('list-dragon');
-
-var Local = require('./Local');
-var DataModelDecorator = require('./DataModelDecorator');
+var Behavior = require('./Behavior');
 var DataModelJSON = require('../dataModels/JSON');
 var features = require('../features');
-var addStylesheet = require('../../css/stylesheets');
-//var aggregations = require('hyper-analytics').util.aggregations;
-//var aggregations = require('../local_node_modules/hyper-analytics').util.aggregations;
-var aggregations = require('../local_node_modules/finanalytics').aggregations;
+
+var REGEX_CAMEL_CASE = /([^_A-Z])([A-Z]+)/g; // all instances of xX or _X within a "word"
 
 /**
  * @name behaviors.JSON
  * @desc > Same parameters as {@link behaviors.Behavior#initialize|initialize}, which is called by this constructor.
  * @constructor
+ * @extends Behavior
  */
-var JSON = Local.extend('behaviors.JSON', {
+var JSON = Behavior.extend('behaviors.JSON', {
 
     /**
      * @summary Constructor logic, called _after_{@link Behavior#initialize|Behavior.initialize()}.
      * @desc This method will be called upon instantiation of this class or of any class that extends from this class.
      * > All `initialize()` methods in the inheritance chain are called, in turn, each with the same parameters that were passed to the constructor, beginning with that of the most "senior" class through that of the class of the new instance.
      *
-     * @param grid - the hypergrid
-     * @param {object[]} dataRows - array of uniform data objects
      * @memberOf behaviors.JSON.prototype
      */
-    initialize: function(grid, dataRows) {
-        this.setData(dataRows);
+    initialize: function(grid, options) {
+        this.setData(options);
+        if (options.pipeline) {
+            this.setPipeline(options.pipeline);
+        }
     },
 
     features: [
@@ -42,52 +39,64 @@ var JSON = Local.extend('behaviors.JSON', {
         features.ColumnSelection,
         features.ColumnMoving,
         features.ColumnSorting,
-        features.CellEditing,
         features.CellClick,
+        features.CellEditing,
         features.OnHover
     ],
 
-    aggregations: aggregations,
-
     createColumns: function() {
-        var dataModel = this.getDataModel();
-        var columnCount = dataModel.getColumnCount();
-        var headers = dataModel.getHeaders();
-        var fields = dataModel.getFields();
+        var schema = this.dataModel.schema;
+
         this.clearColumns();
-        for (var i = 0; i < columnCount; i++) {
-            var header = headers[i];
-            var column = this.addColumn(i, header);
-            var properties = column.getProperties();
-            properties.field = fields[i];
-            properties.header = header;
-            properties.complexFilter = null;
-        }
+
+        schema.forEach(function(columnSchema, index) {
+            this.addColumn({
+                index: index,
+                header: columnSchema.header,
+                calculator: columnSchema.calculator
+            });
+
+            this.columnEnum[this.columnEnumKey(columnSchema.name)] = index; // todo: move columnEnum code from core to demo
+        }, this);
     },
 
-    getDefaultDataModel: function() {
-        return new DataModelDecorator(this.grid, new DataModelJSON);
+    /**
+     * @summary Style enum keys.
+     * @desc Override this method to style your keys to your liking.
+     * @param key
+     * @todo move columnEnum code from core to demo
+     * @returns {string}
+     */
+    columnEnumKey: function(key) {
+        return key.replace(REGEX_CAMEL_CASE, '$1_$2').toUpperCase();
     },
 
-    applyAnalytics: function() {
-        this.dataModel.applyAnalytics();
+    getNewDataModel: function(options) {
+        return new DataModelJSON(this.grid, options);
     },
 
     /**
      * @memberOf behaviors.JSON.prototype
      * @description Set the header labels.
-     * @param {string[]} headerLabels - The header labels.
+     * @param {string[]|object} headers - The header labels. One of:
+     * * _If an array:_ Must contain all headers in column order.
+     * * _If a hash:_ May contain any headers, keyed by field name, in any order.
      */
-    setHeaders: function(headerLabels) {
-        this.getDataModel().setHeaders(headerLabels);
-    },
-
-    /**
-     * @memberOf behaviors.JSON.prototype
-     * @desc * @returns {string[]} The header labels.
-     */
-    getHeaders: function() {
-        return this.getDataModel().getHeaders();
+    setHeaders: function(headers) {
+        if (headers instanceof Array) {
+            // Reset all headers
+            var allColumns = this.allColumns;
+            headers.forEach(function(header, index) {
+                allColumns[index].header = header; // setter updates header in both column and data source objects
+            });
+        } else if (typeof headers === 'object') {
+            // Adjust just the headers in the hash
+            this.allColumns.forEach(function(column) {
+                if (headers[column.name]) {
+                    column.header = headers[column.name];
+                }
+            });
+        }
     },
 
     /**
@@ -98,75 +107,128 @@ var JSON = Local.extend('behaviors.JSON', {
     setFields: function(fieldNames) {
         //were defining the columns based on field names....
         //we must rebuild the column definitions
-        this.getDataModel().setFields(fieldNames);
+        this.dataModel.setFields(fieldNames);
         this.createColumns();
     },
 
     /**
+     * @see {@link dataModels.JSON#setPipeline}
+     * @param {object} [DataSources] - New pipeline description. _(See {@link dataModels.JSON#setPipeline}.)_
+     * @param {object} [options] - Takes first argument position when `DataSources` omitted. _(See {@link dataModels.JSON#setPipeline}.)_
+     * @param {boolean} [options.apply=true] Apply data transformations to the new data.
      * @memberOf behaviors.JSON.prototype
-     * @description Get the field names.
-     * @returns {string[]}
      */
-    getFields: function() {
-        return this.getDataModel().getFields();
+    setPipeline: function(DataSources, options) {
+        if (!Array.isArray(DataSources)) {
+            options = DataSources;
+            DataSources = undefined;
+        }
+
+        this.dataModel.setPipeline(DataSources, options);
+
+        if (!options || options.apply === undefined || options.apply) {
+            this.reindex();
+        }
+    },
+
+    /**
+     * Pop pipeline stack.
+     * @see {@link dataModels.JSON#unstashPipeline}
+     * @param {string} [whichStash]
+     * @param {object} [options] - Takes first argument position when `DataSources` omitted.
+     * @param {boolean} [options.apply=true] Apply data transformations to the new data.
+     */
+    unstashPipeline: function(stash, options) {
+        if (typeof stash === 'object') {
+            options = stash;
+            stash = undefined;
+        }
+
+        this.dataModel.unstashPipeline(stash);
+
+        if (!options || options.apply === undefined || options.apply) {
+            this.reindex();
+        }
     },
 
     /**
      * @memberOf behaviors.JSON.prototype
      * @description Set the data field.
-     * @param {object[]} objects - An array of uniform objects, each being a row in the grid.
+     * @param {function|object[]} [dataRows=options.data] - Array of uniform data row objects or function returning same.
+     * @param {object} [options] - Takes first argument position when `dataRows` omitted.
+     * @param {function|object} [options.data] - Array of uniform data row objects or function returning same.
+     * Passed as 1st param to {@link dataModel.JSON#setData}. If falsy, method aborted.
+     * @param {function|object} [options.fields] - Array of field names or function returning same.
+     * Passed as 2nd param to {@link dataModel.JSON#setData}.
+     * @param {function|object} [options.calculators] - Array of calculators or function returning same.
+     * Passed as 3rd param to {@link dataModel.JSON#setData}.
+     * @param {boolean} [options.apply=true] Apply data transformations to the new data.
      */
-    setData: function(dataRows) {
-        this.getDataModel().setData(dataRows);
-        this.createColumns();
+    setData: function(dataRows, options) {
+        if (!(Array.isArray(dataRows) || typeof dataRows === 'function')) {
+            options = dataRows;
+            dataRows = options && options.data;
+        }
+
+        dataRows = this.unwrap(dataRows);
+
+        if (dataRows === undefined) {
+            return;
+        }
+
+        if (!Array.isArray(dataRows)) {
+            throw 'Data is not an array';
+        }
+
+        options = options || {};
+        var grid = this.grid;
+
+        this.dataModel.setData(
+            dataRows,
+            this.unwrap(options.schema) || [] // *always* define a new schema on reset
+        );
+
+        if (grid.cellEditor) {
+            grid.cellEditor.cancelEditing();
+        }
+
+        if (options.apply === undefined || options.apply) {
+            this.reindex();
+        }
+
         var self = this;
-        if (this.grid.isColumnAutosizing()) {
+        this.createColumns();
+        if (self.grid.isColumnAutosizing()) {
             setTimeout(function() {
                 self.autosizeAllColumns();
             }, 100);
-            self.changed();
+            self.grid.allowEvents(self.dataModel.getRowCount() > 0);
         } else {
             setTimeout(function() {
-                self.allColumns[-1].checkColumnAutosizing(true);
-                self.changed();
+                self.getColumn(-1).checkColumnAutosizing(true);
+                self.grid.allowEvents(self.dataModel.getRowCount() > 0);
             });
         }
     },
-
     /**
-     * @summary Set the top totals.
+     * @summary Rebinds the data without reshaping it.
+     * @param dataRows
+     * @param options
      * @memberOf behaviors.JSON.prototype
-     * @param {Array<Array>} totalRows - array of rows (arrays) of totals
      */
-    setTopTotals: function(totalRows) {
-        this.getDataModel().setTopTotals(totalRows);
-    },
+    updateData: function(dataRows, options){
+        options = options || {};
+        if (!(Array.isArray(dataRows) || typeof dataRows === 'function')) {
+            options = dataRows;
+            dataRows = options && options.data;
+        }
+        dataRows = this.unwrap(dataRows);
+        this.dataModel.setData(
+            dataRows,
+            this.unwrap(options.schema) // undefined will be ignored
+        );
 
-    /**
-     * @summary Get the top totals.
-     * @memberOf behaviors.JSON.prototype
-     * @returns {Array<Array>}
-     */
-    getTopTotals: function() {
-        return this.getDataModel().getTopTotals();
-    },
-
-    /**
-     * @summary Set the bottom totals.
-     * @memberOf behaviors.JSON.prototype
-     * @param {Array<Array>} totalRows - array of rows (arrays) of totals
-     */
-    setBottomTotals: function(totalRows) {
-        this.getDataModel().setBottomTotals(totalRows);
-    },
-
-    /**
-     * @summary Get the bottom totals.
-     * @memberOf behaviors.JSON.prototype
-     * @returns {Array<Array>}
-     */
-    getBottomTotals: function() {
-        return this.getDataModel().getBottomTotals();
+        this.reindex();
     },
 
     /**
@@ -174,15 +236,15 @@ var JSON = Local.extend('behaviors.JSON', {
      * @description Build the fields and headers from the supplied column definitions.
      * ```javascript
      * myJsonBehavior.setColumns([
-     *     { title: 'Stock Name', field: 'short_description' },
-     *     { title: 'Status', field: 'trading_phase' },
-     *     { title: 'Reference Price', field: 'reference_price' }
+     *     { header: 'Stock Name', name: 'short_description' },
+     *     { header: 'Status', name: 'trading_phase' },
+     *     { header: 'Reference Price', name: 'reference_price' }
      * ]);
      * ```
      * @param {Array} columnDefinitions - an array of objects with fields 'title', and 'field'
      */
     setColumns: function(columnDefinitions) {
-        this.getDataModel().setColumns(columnDefinitions);
+        console.warn('This function does not do anything');
     },
 
     /**
@@ -194,122 +256,24 @@ var JSON = Local.extend('behaviors.JSON', {
         event.row = this.getRow(event.gridCell.y);
     },
 
+    //Not being used. Should be repurposed??
     setDataProvider: function(dataProvider) {
-        this.getDataModel().setDataProvider(dataProvider);
+        this.dataModel.setDataProvider(dataProvider);
     },
 
     hasHierarchyColumn: function() {
-        return this.getDataModel().hasHierarchyColumn();
+        return this.dataModel.hasHierarchyColumn();
     },
 
-    getColumnAlignment: function(x) {
-        if (x === 0 && this.hasHierarchyColumn()) {
-            return 'left';
-        } else {
-            return 'center';
-        }
-    },
-
-    getRowSelectionMatrix: function(selectedRows) {
-        return this.getDataModel().getRowSelectionMatrix(selectedRows);
-    },
-
-    getColumnSelectionMatrix: function(selectedColumns) {
-        return this.getDataModel().getColumnSelectionMatrix(selectedColumns);
-    },
-
-    getSelectionMatrix: function(selections) {
-        return this.getDataModel().getSelectionMatrix(selections);
-    },
-
-    getRowSelection: function() {
-        var selectedRows = this.getSelectedRows();
-        return this.getDataModel().getRowSelection(selectedRows);
-    },
-
-    getColumnSelection: function() {
-        var selectedColumns = this.getSelectedColumns();
-        return this.getDataModel().getColumnSelection(selectedColumns);
-    },
-
-    getSelection: function() {
-        var selections = this.getSelections();
-        return this.getDataModel().getSelection(selections);
-    },
-
-    buildColumnPicker: function(div) {
-        if (!this.isColumnReorderable()) {
-            return false;
-        }
-
-        var listOptions = {
-            cssStylesheetReferenceElement: div
-        };
-
-        var groups = { models: this.getGroups(), title: 'Groups' },
-            availableGroups = { models: this.getAvailableGroups(), title: 'Available Groups' },
-            hiddenColumns = { models: this.getHiddenColumns(), title: 'Hidden Columns' },
-            visibleColumns = { models: this.getVisibleColumns(), title: 'Visible Columns'},
-            groupLists = new ListDragon([groups, availableGroups], listOptions),
-            columnLists = new ListDragon([hiddenColumns, visibleColumns], listOptions),
-            listSets = [groupLists, columnLists];
-
-        addStylesheet('list-dragon', div);
-
-        listSets.forEach(function(listSet) {
-            listSet.modelLists.forEach(function(list) {
-                div.appendChild(list.container);
-            });
-        });
-
-        //attach for later retrieval
-        div.lists = {
-            group: groups.models,
-            availableGroups: availableGroups.models,
-            hidden: hiddenColumns.models,
-            visible: visibleColumns.models
-        };
-
-        return true;
-    },
-    getGroups: function() {
-        return this.getDataModel().getGroups();
-    },
-    getAvailableGroups: function() {
-        return this.getDataModel().getAvailableGroups();
-    },
     getHiddenColumns: function() {
-        return this.getDataModel().getHiddenColumns();
+        return this.dataModel.getHiddenColumns();
+    },
+
+    getActiveColumns: function() {
+        return this.dataModel.getActiveColumns();
     },
     getVisibleColumns: function() {
-        return this.getDataModel().getVisibleColumns();
-    },
-    setColumnDescriptors: function(lists) {
-        //assumes there is one row....
-        var tree = this.columns[0];
-        this.columns.length = 0;
-        if (tree && tree.label === 'Tree') {
-            this.columns.push(tree);
-        }
-        for (var i = 0; i < lists.visible.length; i++) {
-            this.columns.push(lists.visible[i]);
-        }
-
-        var groupBys = lists.group.map(function(e) {
-            return e.id;
-        });
-        this.getDataModel().setGroups(groupBys);
-
-        this.changed();
-    },
-
-    getSelectedRows: function() {
-        var offset = -this.grid.getHeaderRowCount();
-        var selections = this.grid.selectionModel.getSelectedRows();
-        var result = selections.map(function(each) {
-            return each + offset;
-        });
-        return result;
+        return this.deprecated('getVisibleColumns()', 'getActiveColumns()', '1.0.6', arguments);
     },
 
     getSelectedColumns: function() {
@@ -318,8 +282,11 @@ var JSON = Local.extend('behaviors.JSON', {
 
     getSelections: function() {
         return this.grid.selectionModel.getSelections();
-    }
+    },
 
+    getSortedColumnIndexes: function(){
+      return this.dataModel.getSortedColumnIndexes();
+    }
 });
 
 module.exports = JSON;
