@@ -6,9 +6,11 @@ var Simple = require('./Simple');
 var Formatters = require('../lib/Formatters');
 
 function parseDate(input) {
-  var parts = input.match(/(\d+)/g);
-  // new Date(year, month [, date [, hours[, minutes[, seconds[, ms]]]]])
-  return new window.Date(parts[0], parts[1] - 1, parts[2]); // months are 0-based
+    var parts = input.match(/(\d+)/g);
+    // new Date(year, month [, date [, hours[, minutes[, seconds[, ms]]]]])
+    // return new window.Date(parts[0], parts[1] - 1, parts[2]); // months are 0-based
+    // [MFS] Use UTC
+    return new window.Date(`${input}T00:00:00Z`);  
 }
 
 /**
@@ -38,6 +40,11 @@ var Date = Simple.extend('Date', {
 
     getEditorValue: function() {
         var value = this.getInput().value;
+        // [MFS]
+        if (value === "") {
+            return "";
+        }
+
         value = parseDate(value);
         return value;
     },

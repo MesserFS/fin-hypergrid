@@ -9,6 +9,8 @@ function Column(behavior, index, label) {
     this.dataModel = behavior.getDataModel();
     this.index = index;
     this.label = label;
+    //[MFS]
+    this.clearObjectProperties = behavior.clearObjectProperties;
 }
 
 Column.prototype = {
@@ -93,7 +95,7 @@ Column.prototype = {
         var type = props.type;
         if (!type) {
             type = this.computeColumnType();
-            if (type !== 'unkknown') {
+            if (type !== 'unknown') {
                 props.type = type;
             }
         }
@@ -128,7 +130,14 @@ Column.prototype = {
         var typeOf = typeof something;
         switch (typeOf) {
             case 'object':
-                return something.constructor.name.toLowerCase();
+                // [MFS]
+                if (something === null || something === undefined) {
+                    return "textfield";
+                } else {
+                    return something.constructor.name.toLowerCase();
+                }
+            case 'string':
+                return "textfield";
             case 'number':
                 return parseInt(something) === something ? 'int' : 'float';
             default:

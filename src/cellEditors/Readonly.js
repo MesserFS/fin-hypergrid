@@ -7,7 +7,13 @@ var CellEditor = require('./CellEditor.js');
 /**
  * @constructor
  */
-var Simple = CellEditor.extend('Simple', {
+var Readonly = CellEditor.extend('Readonly', {
+
+    template: function() {
+        /*
+            <input id="editor" readonly>
+        */
+    },    
 
     /**
      * my main input control
@@ -20,45 +26,28 @@ var Simple = CellEditor.extend('Simple', {
     /**
      * my lookup alias
      * @type {string}
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      */
-    alias: 'simple',
+    alias: 'readonly',
 
     /**
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      */
-    initialize: function() {
+    initialize: function () {
         this.editorPoint = {
             x: 0,
             y: 0
         };
     },
 
-    specialKeyups: {
-        //0x08: 'clearStopEditing', // backspace
-        0x09: 'stopEditing', // tab
-        0x0d: 'stopEditing', // return/enter
-        0x1b: 'cancelEditing' // escape
-    },
-
-    keyup: function(e) {
+    keyup: function (e) {
         if (e) {
-            var specialKeyup = this.specialKeyups[e.keyCode];
-
-            // [MFS] disable grid taking focus
-            if (false && specialKeyup) {
-                e.preventDefault();
-                this[specialKeyup]();
-                this.grid.repaint();
-                this.grid.takeFocus();
-            }
-
             this.grid.fireSyntheticEditorKeyUpEvent(this, e);
         }
     },
 
     /**
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      * @desc  the function to override for initialization
      */
     initializeInput: function (input) {
@@ -87,7 +76,7 @@ var Simple = CellEditor.extend('Simple', {
                 self.grid.takeFocus();
             } else {
                 self.grid.fireSyntheticEditorKeyPressEvent(self, e);
-            }            
+            }
         });
         input.onblur = function (e) {
             // [MFS]
@@ -110,23 +99,23 @@ var Simple = CellEditor.extend('Simple', {
     },
 
     /**
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      * @returns {object} the current editor's value
      */
-    getEditorValue: function() {
+    getEditorValue: function () {
         var value = this.getInput().value;
         return value;
     },
 
     /**
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      * @desc save the new value into the behavior(model)
      */
-    setEditorValue: function(value) {
-        this.getInput().value = value;
+    setEditorValue: function (value) {
+        this.getInput().value = value === undefined ? "" : value;
     },
 
-    clearStopEditing: function() {
+    clearStopEditing: function () {
         this.setEditorValue('');
         this.stopEditing();
     },
@@ -143,29 +132,31 @@ var Simple = CellEditor.extend('Simple', {
     },
 
     /**
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      * @desc display the editor
      */
-    showEditor: function() {
+    showEditor: function () {
         this.getInput().style.display = 'inline';
     },
 
     /**
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      * @desc hide the editor
      */
-    hideEditor: function() {
+    hideEditor: function () {
         this.getInput().style.display = 'none';
     },
+
+
 
     /**
      * @summary Request focus for my input control.
      * @desc See GRID-95 "Scrollbar moves inward" for issue and work-around explanation.
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      */
     takeFocus: function () {
         var self = this;
-        setTimeout(function() {
+        setTimeout(function () {
             var transformWas = self.input.style.transform;
             self.input.style.transform = 'translate(0,0)'; // work-around: move to upper left
 
@@ -173,32 +164,32 @@ var Simple = CellEditor.extend('Simple', {
             self.selectAll();
 
             self.input.style.transform = transformWas;
-        // [MFS]
+            // [MFS]
         }, 10);
     },
 
     /**
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      * @desc select everything
      */
-    selectAll: function() {
+    selectAll: function () {
 
     },
 
     /**
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      * @desc how much should I offset my bounds from 0,0
      */
-    originOffset: function() {
+    originOffset: function () {
         return [0, 0];
     },
 
     /**
-     * @memberOf Simple.prototype
+     * @memberOf Readonly.prototype
      * @desc set the bounds of my input control
      * @param {rectangle} rectangle - the bounds to move to
      */
-    setBounds: function(cellBounds) {
+    setBounds: function (cellBounds) {
         var originOffset = this.originOffset();
         var translation = 'translate('
             + (cellBounds.x - 1 + originOffset[0]) + 'px,'
@@ -223,28 +214,14 @@ var Simple = CellEditor.extend('Simple', {
         //var xOffset = this.grid.canvas.getBoundingClientRect().left;
     },
 
-    saveEditorValue: function() {
-        var point = this.getEditorPoint();
-        var value = this.getEditorValue();
-        if (value === this.initialValue) {
-            return; //data didn't change do nothing
-        }
-        if (parseFloat(this.initialValue) === this.initialValue) { // I'm a number
-            value = parseFloat(value);
-        }
-        var continued = this.grid.fireBeforeCellEdit(point, this.initialValue, value, this);
-        if (!continued) {
-            return;
-        }
-        this.grid.behavior.setValue(point.x, point.y, value);
-        this.grid.fireAfterCellEdit(point, this.initialValue, value, this);
+    saveEditorValue: function () {       
     },
 
     /**
      * @memberOf CellEditor.prototype
      * @desc move the editor to the current editor point
      */
-    _moveEditor: function() {
+    _moveEditor: function () {
         var editorPoint = this.getEditorPoint();
         var cellBounds = this.grid._getBoundsOfCell(editorPoint.x, editorPoint.y);
 
@@ -257,7 +234,7 @@ var Simple = CellEditor.extend('Simple', {
         this.setBounds(cellBounds);
     },
 
-    moveEditor: function() {
+    moveEditor: function () {
         this._moveEditor();
         this.takeFocus();
     },
@@ -285,7 +262,7 @@ var Simple = CellEditor.extend('Simple', {
         this.checkEditor();
     },
 
-    checkEditor: function() {
+    checkEditor: function () {
         if (!this.checkEditorPositionFlag) {
             return;
         } else {
@@ -305,7 +282,7 @@ var Simple = CellEditor.extend('Simple', {
         }
     },
 
-    attachEditor: function() {
+    attachEditor: function () {
         var input = this.getInput(),
             div = this.grid.div,
             referenceNode = div.querySelectorAll('.finbar-horizontal, .finbar-vertical');
@@ -313,18 +290,18 @@ var Simple = CellEditor.extend('Simple', {
         div.insertBefore(input, referenceNode.length ? referenceNode[0] : null);
     },
 
-    preShowEditorNotification: function() {
+    preShowEditorNotification: function () {
         this.setEditorValue(this.initialValue);
     },
 
-    getInput: function() {
+    getInput: function () {
         if (!this.input) {
             this.input = this.getDefaultInput();
         }
         return this.input;
     },
 
-    getDefaultInput: function() {
+    getDefaultInput: function () {
         var div = document.createElement('DIV');
         div.innerHTML = this.getHTML();
         var input = div.firstChild;
@@ -332,7 +309,7 @@ var Simple = CellEditor.extend('Simple', {
         return input;
     },
 
-    updateView: function() {
+    updateView: function () {
         var oldGuy = this.getInput();
         var parent = oldGuy.parentNode;
         var newGuy = this.getDefaultInput();
@@ -340,7 +317,7 @@ var Simple = CellEditor.extend('Simple', {
         parent.replaceChild(newGuy, oldGuy);
     },
 
-    showDropdown: function(element) {
+    showDropdown: function (element) {
         var event;
         event = document.createEvent('MouseEvents');
         event.initMouseEvent('mousedown', true, true, window);
@@ -348,4 +325,4 @@ var Simple = CellEditor.extend('Simple', {
     }
 });
 
-module.exports = Simple;
+module.exports = Readonly;

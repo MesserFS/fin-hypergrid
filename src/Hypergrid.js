@@ -20,6 +20,9 @@ var TableDialog = require('./lib/TableDialog');
 var Formatters = require('./lib/Formatters');
 var CustomFilter = require('./lib/CustomFilter');
 
+// [MFS]
+var OperationQueue = require('./lib/OperationQueue');
+
 var themeInitialized = false,
     polymerTheme = Object.create(defaults),
     globalProperties = Object.create(polymerTheme);
@@ -52,11 +55,16 @@ function Hypergrid(div, behaviorFactory, margin) {
     this.renderOverridesCache = {};
     this.behavior = behaviorFactory(this);
 
+    this.operationQueue = new OperationQueue();
+    // [MFS]
+    // Enable Custom ContextMenu
+    /*
     //prevent the default context menu for appearing
     this.div.oncontextmenu = function(event) {
         event.preventDefault();
         return false;
     };
+    */
 
     this.clearMouseDown();
     this.dragExtent = new Point(0, 0);
@@ -96,6 +104,16 @@ function Hypergrid(div, behaviorFactory, margin) {
     //this.computeCellsBounds();
 
     this.filter = new CustomFilter();
+   
+    // [MFS] DomReady, previously this.fire("load") but we no longer use polymer so no fire function
+    var event = new CustomEvent("load", {
+        "detail": null,
+        "bubbles": true,
+        "cancelable": true
+    });
+
+    this.div.dispatchEvent(event);
+    
 }
 
 Hypergrid.prototype = {
@@ -283,10 +301,14 @@ Hypergrid.prototype = {
     },
 
     initLocalCellEditors: function() {
-
+    // [MFS]
         var cellEditors = [
             'Textfield',
             'Choice',
+            "mfsChoice",
+            "mfsNumber",
+            "readonly",
+            "filterfield",
             //'Combo',
             'Color',
             'Date',
@@ -892,6 +914,24 @@ Hypergrid.prototype = {
         var divCanvas = this.divCanvas = document.createElement('div');
         this.div.appendChild(divCanvas);
         this.canvas = new Canvas(divCanvas, this.renderer);
+
+        // re-implement takeFocus function
+        this.canvas.takeFocus = function () {
+            self.addPromiseFunction(function () {
+                var p = new Promise(function(resolver, rejector) {
+                    if (!self.canvas.hasFocus()) {
+                        setTimeout(function () {
+                            self.canvas.canvas.focus();
+                            resolver(null);
+                        }, 0);
+                    } else {
+                        setTimeout(function () {
+                            resolver(null);
+                        }, 0);
+                    }
+                });                
+            });            
+        };
 
         var style = divCanvas.style;
         style.position = 'absolute';
@@ -2072,7 +2112,8 @@ Hypergrid.prototype = {
         if (this.isEditing()) {
             this.stopEditing();
         } else {
-            this.getCanvas().takeFocus();
+            // [MFS] promise version
+            this.canvas.takeFocus();
         }
     },
 
@@ -2082,7 +2123,10 @@ Hypergrid.prototype = {
      */
     editorTakeFocus: function() {
         if (this.cellEditor) {
+            console.log('editorTakeFocus: cellEditor.takeFocus');
             return this.cellEditor.takeFocus();
+        } else {
+            console.log('editorTakeFocus: not found');
         }
     },
 
@@ -3216,6 +3260,11 @@ Hypergrid.prototype = {
         var formatter = this.getFormatter(formatType);
         var string = formatter(value);
         return string;
+    },
+
+    // [MFS]
+    addPromiseFunction: function(fn) {
+        return this.operationQueue.addPromiseFunction(fn);
     }
 };
 

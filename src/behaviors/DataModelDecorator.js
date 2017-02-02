@@ -208,7 +208,17 @@ DataModelDecorator.prototype = {
 
     getUnfilteredRowCount: function() {
         return this.getComponent().getUnfilteredRowCount();
+    },
+    
+    // [MFS] Additional API
+    getNewData: function() {
+        return this.getComponent().getNewData ? this.getComponent().getNewData() : null;
+    },
+    // [MFS] Additional API
+    setNewData: function(newData) {
+        this.getComponent().setNewData && this.getComponent().setNewData(newData);
     }
+
 };
 
 module.exports = DataModelDecorator;

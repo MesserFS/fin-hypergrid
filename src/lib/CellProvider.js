@@ -142,7 +142,9 @@ var CellProvider = Base.extend('CellProvider', {
         val = valueOrFunctionExecute(config, val);
         val = config.formatter(val);
 
-        font = config.isSelected ? config.foregroundSelectionFont : config.font;
+        // [MFS]
+        // font = config.isSelected ? config.foregroundSelectionFont : config.font;
+        font = config.isSelected || config.isHeaderRow || config.isFilterRow ? config.foregroundSelectionFont : config.font;
 
         if (gc.font !== font) {
             gc.font = font;

@@ -94,8 +94,46 @@ var CellEditor = Base.extend('CellEditor', {
      * @desc begin editing at location point
      * @param {Point} point - the location to start editing at
      */
-    beginEditAt: function(point) {
-        this.editorPoint = point;
+    // [MFS]
+    /**
+    * @function
+    * @instance
+    * @description
+    begin editing at location point
+    * @param {rectangle.point} point - the location to start editing at
+    */
+    beginEditAt: function (point) {
+        //// [MFS] Only exeucte when DataWriteLock is acquired
+        if (this.acquireDataWriteLock && !this.acquireDataWriteLock()) {
+            console.warn("Cannot acquire DataWriteLock.");
+            return;
+        }
+
+        if (this.acquireDataWriteLock && !this.realBeginEditAt) {
+            console.warn("realBeginEditAt not defined.");
+            return;
+        }
+
+        var self = this;
+        this.grid.addPromiseFunction(() => {
+            return self.realBeginEditAt(point);
+        });
+    },
+
+    realBeginEditAt: function (point) {
+        this.setEditorPoint(point);
+        var model = this.getBehavior();
+        var value = model._getValue(point.x, point.y);
+        var proceed = this.grid.fireBeforeCellEdit(point, value);
+        if (!proceed) {
+            //we were cancelled
+            return;
+        }
+        this.initialValue = value;
+        this.setEditorValue(value);
+        this.isEditing = true;
+        this.setCheckEditorPositionFlag();
+        this.checkEditor();
     },
 
     /**
@@ -140,7 +178,8 @@ var CellEditor = Base.extend('CellEditor', {
      * @memberOf CellEditor.prototype
      * @desc stop editing
      */
-    stopEditing: function() {
+    stopEditing: function () {
+        // [MFS]
         if (!this.isEditing) {
             return;
         }
@@ -151,14 +190,19 @@ var CellEditor = Base.extend('CellEditor', {
         this.saveEditorValue();
         this.isEditing = false;
         this.hideEditor();
-    },
+        //// [MFS] Release DataWriteLock
+        this.releaseDataWriteLock && this.releaseDataWriteLock();
+    },    
 
-    cancelEditing: function() {
+    cancelEditing: function () {
+        // [MFS]
         if (!this.isEditing) {
             return;
         }
         this.isEditing = false;
         this.hideEditor();
+        //// [MFS] Release DataWriteLock
+        this.releaseDataWriteLock && this.releaseDataWriteLock();
     },
 
     /**
@@ -184,7 +228,11 @@ var CellEditor = Base.extend('CellEditor', {
      * @memberOf CellEditor.prototype
      * @desc check that the editor is in the correct location, and is showing/hidden appropriately
      */
-    checkEditor: function() {
+    checkEditor: function () {
+        // [MFS]
+        return new Promise((resolve, reject) => {
+            resolve(null);
+        });
     },
 
     /** @deprecated Use `.grid` property instead. */

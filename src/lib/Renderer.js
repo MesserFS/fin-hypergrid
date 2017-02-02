@@ -1008,17 +1008,29 @@ var Renderer = Base.extend('Renderer', {
             cellProperties.isUserDataArea = true;
         }
 
-        var rowNum = r - headerRowCount + 1;
+        // [MFS]
+        var rowNum = r - headerRowCount;
+        // var rowNum = r - headerRowCount + 1;
+
+        
 
         if (c === -1) {
+            // [MFS]
+            var rowNumDisplay = this.grid.behavior.getFixedColumnValue(0, rowNum);
+
             if (r === 0) { // header label row gets "master" checkbox
-                cellProperties.value = [images.checkbox(areAllRowsSelected), '', null];
+                // Disable checkbox until implemented
+                // cellProperties.value = [images.checkbox(areAllRowsSelected), '', null];
+                cellProperties.value = [null, '', null];
             } else if (isFilterRow) { // no checkbox but show filter icon
                 cellProperties.value = [images.filter(false), '', null];
             } else if (isHeaderRow || isFooterRow) { // no checkbox on "totals" rows
                 cellProperties.value = '';
             } else {
-                cellProperties.value = [images.checkbox(isRowSelected), rowNum, null];
+                // [MFS] using rowNumberDisplay rather than rowNum
+                // Disable checkbox until implemented
+                // cellProperties.value = [images.checkbox(isRowSelected), rowNumDisplay, null];
+                cellProperties.value = [null, rowNumDisplay, null];
             }
             cellProperties.halign = 'right';
         } else {
@@ -1036,6 +1048,9 @@ var Renderer = Base.extend('Renderer', {
         cellProperties.isRowSelected = isRowSelected;
         cellProperties.isColumnSelected = isColumnSelected;
         cellProperties.isInCurrentSelectionRectangle = grid.isInCurrentSelectionRectangle(c, r);
+        // [MFS]
+        cellProperties.isHeaderRow = isHeaderRow;
+        cellProperties.isFilterRow = isFilterRow;
 
         if (grid.mouseDownState) {
             var point = grid.mouseDownState.gridCell;
