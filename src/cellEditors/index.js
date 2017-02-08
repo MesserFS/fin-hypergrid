@@ -21,12 +21,12 @@ function CellEditors(grid, privateRegistry) {
     if (privateRegistry || !this.get('celleditor')) {
         this.add(require('./CellEditor'));
         this.add(require('./ComboBox'));
-        this.add(require('./MFSChoice'));
+        // this.add(require('./MFSChoice'));
         this.add(require('./Color'));
         this.add(require('./Date'));
         this.add(require('./FilterBox'));
         this.add(require('./FilterField'));
-        this.add(require('./MFSNumber'));
+        // this.add(require('./MFSNumber'));
         this.add(require('./Number'));
         this.add(require('./Readonly'));
         this.add(require('./Slider'));

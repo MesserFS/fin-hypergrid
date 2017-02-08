@@ -1,13 +1,15 @@
 'use strict';
 
+var Behavior = require('../Behavior');
 var ListDragon = require('list-dragon');
 var Point = require('rectangular').Point;
 var ExpandedItemsManager = require('./expanded-items-manager');
-var Local = require('../Local');
-var DataModelDecorator = require('../DataModelDecorator');
-var DataModelMfs = require('../../dataModels/mfs');
+var DataModelMfs = require('../../dataModels/MFS/mfsDataModel');
+var cellEventFactory = require('../../lib/cellEventFactory');
+var HeaderSubgrid = require('../../dataModels/HeaderSubgrid');
+var MFSFilterSubgrid = require('../../dataModels/MFS/MFSFilterSubgrid');
+var SummarySubgrid = require('../../dataModels/SummarySubgrid');
 var features = require('../../features');
-var addStylesheet = require('../../../css/stylesheets');
 //var aggregations = require('hyper-analytics').util.aggregations;
 //var aggregations = require('../local_node_modules/hyper-analytics').util.aggregations;
 var aggregations = require('../../local_node_modules/finanalytics').aggregations;
@@ -102,7 +104,7 @@ var deleteNestedProperty = function (obj, fieldRefs) {
  * @desc > Same parameters as {@link behaviors.Behavior#initialize|initialize}, which is called by this constructor.
  * @constructor
  */
-var MFS = Local.extend('behaviors.MFS', {
+var MFS = Behavior.extend('behaviors.MFS', {
 
     /**
      * @summary Constructor logic, called _after_{@link Behavior#initialize|Behavior.initialize()}.
@@ -110,16 +112,17 @@ var MFS = Local.extend('behaviors.MFS', {
      * > All `initialize()` methods in the inheritance chain are called, in turn, each with the same parameters that were passed to the constructor, beginning with that of the most "senior" class through that of the class of the new instance.
      *
      * @param grid - the hypergrid
-     * @param {object[]} dataRows - array of uniform data objects
+     * @param {object[]} options - options (including data)
      * @memberOf behaviors.MFS.prototype
      */
-    initialize: function(grid, dataRows) {
-        this.setData(dataRows);
+    initialize: function(grid, options) {
+        this.setData(options);
         /**
          * _nextId together with getNextId function combined are served as a sequencing function.
          */
         this._nextId = 1;
 
+        this.tableState = this.tableState || {};
         this.tableState.sorted = [];
         this.tableState.filtered = [];
         // this.sortStates = [' ', ' \u2191', ' \u2193'];
@@ -138,30 +141,60 @@ var MFS = Local.extend('behaviors.MFS', {
         features.Filters
     ],
 
+    reset: function (options) {
+        this.clearState();
+
+        if (this.dataModel) {
+            this.dataModel.reset();
+        } else {
+            /**
+             * @type {DataModel}
+             * @memberOf Behavior.prototype
+             */
+            this.dataModel = this.getNewDataModel(options);
+        }
+
+        // recreate `CellEvent` class so it can set up its internal `grid`, `behavior`, and `dataModel` convenience properties
+        this.CellEvent = cellEventFactory(this.grid);
+
+        this.dataUpdates = {}; //for overriding with edit values;
+        this.scrollPositionX = this.scrollPositionY = 0;
+        this.clearColumns();
+        this.clearState();
+        this.createColumns();
+
+        this.subgrids = options.subgrids || [
+            HeaderSubgrid,
+            MFSFilterSubgrid,
+            [SummarySubgrid, { name: 'topTotals' }],
+            this.dataModel,
+            [SummarySubgrid, { name: 'bottomTotals' }]
+        ];
+    },
+
     aggregations: aggregations,
 
     createColumns: function() {
-        var dataModel = this.getDataModel();
+        var dataModel = this.dataModel;
         var columnCount = dataModel.getColumnCount();
         var headers = dataModel.getHeaders();
         var fields = dataModel.getFields();
         this.clearColumns();
         for (var i = 0; i < columnCount; i++) {
             var header = headers[i];
-            var column = this.addColumn(i, header);
-            var properties = column.getProperties();
-            properties.field = fields[i];
+            var column = this.addColumn(i, fields[i]);
+            var properties = column.properties;
             properties.header = header;
             properties.complexFilter = null;
         }
     },
 
-    getDefaultDataModel: function() {
-        return new DataModelDecorator(this.grid, new DataModelMfs());
-    },
-
     applyAnalytics: function() {
         this.dataModel.applyAnalytics();
+    },
+
+    getCellEditorAt: function (event) {
+        return this._getCellEditorAt(event);
     },
 
     /**
@@ -170,7 +203,7 @@ var MFS = Local.extend('behaviors.MFS', {
      * @param {string[]} headerLabels - The header labels.
      */
     setHeaders: function(headerLabels) {
-        this.getDataModel().setHeaders(headerLabels);
+        this.dataModel.setHeaders(headerLabels);
     },
 
     /**
@@ -178,7 +211,7 @@ var MFS = Local.extend('behaviors.MFS', {
      * @desc * @returns {string[]} The header labels.
      */
     getHeaders: function() {
-        return this.getDataModel().getHeaders();
+        return this.dataModel.getHeaders();
     },
 
     /**
@@ -189,7 +222,7 @@ var MFS = Local.extend('behaviors.MFS', {
     setFields: function (fieldNames) {
         //were defining the columns based on field names....
         //we must rebuild the column definitions
-        this.getDataModel().setFields(fieldNames);
+        this.dataModel.setFields(fieldNames);
         // this.createColumns();
     },
 
@@ -199,7 +232,7 @@ var MFS = Local.extend('behaviors.MFS', {
      * @returns {string[]}
      */
     getFields: function() {
-        return this.getDataModel().getFields();
+        return this.dataModel.getFields();
     },
 
     /**
@@ -209,12 +242,30 @@ var MFS = Local.extend('behaviors.MFS', {
     * @return {object} Return nothing 
     * @param {object[]} jsonData Usually data retrieved from hypergrid (angular) $scope.items
     */
-    setData: function (dataRows) {
+    setData: function (dataRows, options) {
         "use strict";
-        this.getDataModel().setData(dataRows);
+        if (!(Array.isArray(dataRows) || typeof dataRows === 'function')) {
+            options = dataRows;
+            dataRows = options && options.data;
+        }
+
+        dataRows = this.unwrap(dataRows);
+
+        if (dataRows === undefined) {
+            return;
+        }
+
+        if (!Array.isArray(dataRows)) {
+            throw 'Data is not an array';
+        }
+
+        options = options || {};
+        var grid = this.grid;
+
+        this.dataModel.setData(dataRows);
         // this.createColumns();
         
-        if (!this.getDataModel().getNewData()) {
+        if (!this.dataModel.getNewData()) {
             this.setNewData([]);
         }
         
@@ -245,7 +296,7 @@ var MFS = Local.extend('behaviors.MFS', {
      * @param {Array<Array>} totalRows - array of rows (arrays) of totals
      */
     setTopTotals: function(totalRows) {
-        this.getDataModel().setTopTotals(totalRows);
+        this.dataModel.setTopTotals(totalRows);
     },
 
     /**
@@ -254,7 +305,7 @@ var MFS = Local.extend('behaviors.MFS', {
      * @returns {Array<Array>}
      */
     getTopTotals: function() {
-        return this.getDataModel().getTopTotals();
+        return this.dataModel.getTopTotals();
     },
 
     /**
@@ -263,7 +314,7 @@ var MFS = Local.extend('behaviors.MFS', {
      * @param {Array<Array>} totalRows - array of rows (arrays) of totals
      */
     setBottomTotals: function(totalRows) {
-        this.getDataModel().setBottomTotals(totalRows);
+        this.dataModel.setBottomTotals(totalRows);
     },
 
     /**
@@ -272,7 +323,7 @@ var MFS = Local.extend('behaviors.MFS', {
      * @returns {Array<Array>}
      */
     getBottomTotals: function() {
-        return this.getDataModel().getBottomTotals();
+        return this.dataModel.getBottomTotals();
     },
 
     // [MFS]
@@ -300,11 +351,25 @@ var MFS = Local.extend('behaviors.MFS', {
         /// this.columns = JSON.parse(JSON.stringify(columnDefinitions));
         /// In new Hypergrid, it is advised to have a Column class, so:
         this.clearColumns();
+
+        // In latest version of Hypergrid, it is required to have a schema first
+        const schema = columnDefinitions.map(d => {
+            return {
+                "name" : d.data,
+                "header" : d.title
+            };
+        }).concat(buttonDefinitions.map(d => {
+            return {
+                "name": `@${d.Visible}`,
+                "header": d.Caption
+            };
+        }));
+
+        this.dataModel.schema = schema;
         for (var i = 0; i < columnCount; i++) {
             var header = headers[i];
-            var column = this.addColumn(i, header);
-            var properties = column.getProperties();
-            properties.field = fields[i];
+            var column = this.addColumn(i, fields[i]);
+            var properties = column.properties;
             properties.header = header;
             // Sync local filter to the columns
             var filterValue = this.getFilterValueByColumnIndex(i);
@@ -332,9 +397,11 @@ var MFS = Local.extend('behaviors.MFS', {
             var data = '@' + this._buttons[i].Visible; // Magic prefix to ask getValue to use angular
             fields.push(data);
             headers.push('');
-            var column = this.addColumn(columnCount + i, '');
-            var properties = column.getProperties();
-            properties.field = fields[columnCount + i];
+            var column = this.addColumn(columnCount + i,
+            {
+                'name': fields[columnCount + i]
+            });
+            var properties = column.properties;
             properties.header = '';
             properties.complexFilter = null;
 
@@ -365,11 +432,11 @@ var MFS = Local.extend('behaviors.MFS', {
     },
 
     setDataProvider: function(dataProvider) {
-        this.getDataModel().setDataProvider(dataProvider);
+        this.dataModel.setDataProvider(dataProvider);
     },
 
     hasHierarchyColumn: function() {
-        return this.getDataModel().hasHierarchyColumn();
+        return this.dataModel.hasHierarchyColumn();
     },
 
     getColumnAlignment: function(x) {
@@ -381,30 +448,30 @@ var MFS = Local.extend('behaviors.MFS', {
     },
 
     getRowSelectionMatrix: function(selectedRows) {
-        return this.getDataModel().getRowSelectionMatrix(selectedRows);
+        return this.dataModel.getRowSelectionMatrix(selectedRows);
     },
 
     getColumnSelectionMatrix: function(selectedColumns) {
-        return this.getDataModel().getColumnSelectionMatrix(selectedColumns);
+        return this.dataModel.getColumnSelectionMatrix(selectedColumns);
     },
 
     getSelectionMatrix: function(selections) {
-        return this.getDataModel().getSelectionMatrix(selections);
+        return this.dataModel.getSelectionMatrix(selections);
     },
 
     getRowSelection: function() {
         var selectedRows = this.getSelectedRows();
-        return this.getDataModel().getRowSelection(selectedRows);
+        return this.dataModel.getRowSelection(selectedRows);
     },
 
     getColumnSelection: function() {
         var selectedColumns = this.getSelectedColumns();
-        return this.getDataModel().getColumnSelection(selectedColumns);
+        return this.dataModel.getColumnSelection(selectedColumns);
     },
 
     getSelection: function() {
         var selections = this.getSelections();
-        return this.getDataModel().getSelection(selections);
+        return this.dataModel.getSelection(selections);
     },
 
     buildColumnPicker: function(div) {
@@ -424,8 +491,6 @@ var MFS = Local.extend('behaviors.MFS', {
             columnLists = new ListDragon([hiddenColumns, visibleColumns], listOptions),
             listSets = [groupLists, columnLists];
 
-        addStylesheet('list-dragon', div);
-
         listSets.forEach(function(listSet) {
             listSet.modelLists.forEach(function(list) {
                 div.appendChild(list.container);
@@ -443,16 +508,16 @@ var MFS = Local.extend('behaviors.MFS', {
         return true;
     },
     getGroups: function() {
-        return this.getDataModel().getGroups();
+        return this.dataModel.getGroups();
     },
     getAvailableGroups: function() {
-        return this.getDataModel().getAvailableGroups();
+        return this.dataModel.getAvailableGroups();
     },
     getHiddenColumns: function() {
-        return this.getDataModel().getHiddenColumns();
+        return this.dataModel.getHiddenColumns();
     },
     getVisibleColumns: function() {
-        return this.getDataModel().getVisibleColumns();
+        return this.dataModel.getVisibleColumns();
     },
     setColumnDescriptors: function(lists) {
         //assumes there is one row....
@@ -468,7 +533,7 @@ var MFS = Local.extend('behaviors.MFS', {
         var groupBys = lists.group.map(function(e) {
             return e.id;
         });
-        this.getDataModel().setGroups(groupBys);
+        this.dataModel.setGroups(groupBys);
 
         this.changed();
     },
@@ -514,7 +579,7 @@ var MFS = Local.extend('behaviors.MFS', {
     // [MFS]
     getNewData: function () {
         "use strict";
-        return this.getDataModel().getNewData();
+        return this.dataModel.getNewData();
     },
 
     // [MFS]
@@ -532,7 +597,7 @@ var MFS = Local.extend('behaviors.MFS', {
     */
     initColumnIndexes: function () {
         "use strict";
-        var columnCount = this.getColumnCount();
+        var columnCount = this.getActiveColumnCount();
         var fixedColumnCount = this.getFixedColumnCount();
         var i;
         this.tableState.columnIndexes = [];
@@ -614,7 +679,7 @@ var MFS = Local.extend('behaviors.MFS', {
     },
     // [MFS]
     getState: function () {
-        return this.getPrivateState();
+        return this.grid.properties;
     },
     // [MFS]
     /**
@@ -626,8 +691,8 @@ var MFS = Local.extend('behaviors.MFS', {
      */
     setNewData: function (jsonData) {        
         "use strict";
-        jsonData = jsonData === null ? [] : jsonData;
-        this.getDataModel().setNewData(jsonData);
+        jsonData = (jsonData === null || jsonData === undefined) ? [] : jsonData;
+        this.dataModel.setNewData(jsonData);
         this.updateExpandedItems();
         this._newData = jsonData;
         // this.initDataIndexes();
@@ -965,16 +1030,29 @@ var MFS = Local.extend('behaviors.MFS', {
         noop(column);
         throw 'To be defined in mfs-hypergrid-wrapper';
     },
+
+    onDoubleClick: function(grid, event) {
+        "use strict";
+        var processed = false;
+        // Is it an invalid column?
+        // ReSharper disable once ExpressionIsAlwaysConst
+        // ReSharper disable once ConditionIsAlwaysConst
+        !processed && (processed = this.invalidColumnOnClickHandler(grid, event));
+        if (!processed && this.featureChain) {
+            this.featureChain.handleClick(grid, event);
+            this.setCursor(grid);
+        }
+    },
     // [MFS]
     /**
     * click handler for all click events on hypergrid.
     *
-    * @method onTap
+    * @method onClick
     * @return {object} Returns Nothing
     * @param {object} grid The fin-hypergrid
     * @param {object} event A click event defined in fin-hypergrid
     */
-    onTap: function (grid, event) {
+    onClick: function (grid, event) {
         "use strict";
         var processed = false;
         var gridCell = event.gridCell;
@@ -991,29 +1069,42 @@ var MFS = Local.extend('behaviors.MFS', {
         // Adjustment if dataY runs out of boundary
         rowY = Math.min(rowY, this.getExpandedAllRowCount(true));
 
-        // ReSharper disable once ConditionIsAlwaysConst
+        // Is it top left cell for clearing filters
         // ReSharper disable once ExpressionIsAlwaysConst
+        // ReSharper disable once ConditionIsAlwaysConst
+        !processed && (processed = this.clearFiltersHandler(grid, event, rowY));
+
         // Is it on row number column?
-        !processed && (processed = this.rowNumberColumnOnTapHandler(grid, event, rowY));
+        !processed && (processed = this.rowNumberColumnOnClickHandler(grid, event, rowY));
 
         // Is it an invalid column?
-        !processed && (processed = this.invalidColumnOnTapHandler(grid, event, dataX));
+        !processed && (processed = this.invalidColumnOnClickHandler(grid, event, dataX));
 
         // Is it a control button?
-        !processed && (processed = this.controlButtonOnTapHandler(grid, event, dataX, rowY));
+        !processed && (processed = this.controlButtonOnClickHandler(grid, event, dataX, rowY));
 
         // Is it an exising row?
-        !processed && (processed = this.existingRowOnTapHandler(grid, event, dataX, rowY));
+        !processed && (processed = this.existingRowOnClickHandler(grid, event, dataX, rowY));
 
         // Is it a new row?
-        !processed && (processed = this.newRowOnTapHandler(grid, event, dataX, rowY));
+        !processed && (processed = this.newRowOnClickHandler(grid, event, dataX, rowY));
 
         // Is it on a filter row?
-        !processed && (processed = this.filterRowOnTapHandler(grid, event));
+        !processed && (processed = this.filterRowOnClickHandler(grid, event));
 
         if (!processed && this.featureChain) {
-            this.featureChain.handleTap(grid, event);
+            this.featureChain.handleClick(grid, event);
             this.setCursor(grid);
+        }
+    },
+
+    clearFiltersHandler: function (grid, event) {
+        "use strict";
+        if (event.gridCell.x === -1 && event.gridCell.y === 1) {
+            this.clearLocalFilter();
+            return true;
+        } else {
+            return false;
         }
     },
 
@@ -1091,13 +1182,13 @@ var MFS = Local.extend('behaviors.MFS', {
     /**
     * click handler for all click events on row number column on hypergrid.
     *
-    * @method rowNumberColumnOnTapHandler
+    * @method rowNumberColumnOnClickHandler
     * @return {bool} Returns True is processed by this handler; false otherwise
     * @param {object} grid The fin-hypergrid
     * @param {object} event A click event defined in fin-hypergrid
     * @param {int} index of the row. It might be different form dataY due to there might be subitems expanded.
     */
-    rowNumberColumnOnTapHandler: function (grid, event, rowY) {
+    rowNumberColumnOnClickHandler: function (grid, event, rowY) {
         "use strict";
         // [MFS]
         // Changes in 2.0
@@ -1117,28 +1208,30 @@ var MFS = Local.extend('behaviors.MFS', {
     /**
          * click handler for click events on invalid columns in hypergrid.
          *
-         * @method onTap
+         * @method invalidColumnOnClickHandler
          * @return {bool} Returns True is processed by this handler; false otherwise
          * @param {object} grid The fin-hypergrid
          * @param {object} event A click event defined in fin-hypergrid
          * @param {int} index of the column
          */
-    invalidColumnOnTapHandler: function (grid, event, dataX) {
+    invalidColumnOnClickHandler: function (grid, event, dataX) {
         noop(grid, event);
-        return dataX === undefined || this.getColumns().length <= dataX;
+        // Checking dataX no longer works - it will always fallback to rightest column
+        return event.primitiveEvent.detail.mouse.x > event.visibleColumn.right;
+        /// return dataX === undefined || this.getColumns().length <= dataX;
     },
     // [MFS]
     /**
      * click handler for click events on control buttons in hypergrid.
      *
-     * @method onTap
+     * @method controlButtonOnClickHandler
      * @return {bool} Returns True is processed by this handler; false otherwise
      * @param {object} grid The fin-hypergrid
      * @param {object} event A click event defined in fin-hypergrid
      * @param {int} index of the column
      * @param {int} index of the row. It might be different form dataY due to there might be subitems expanded.
      */
-    controlButtonOnTapHandler: function (grid, event, dataX, rowY) {
+    controlButtonOnClickHandler: function (grid, event, dataX, rowY) {
         "use strict";
         // Is the clicked cell a control button? (lazy evaluation)
         if (this.getColumns().length > dataX && // column must be within defined columns
@@ -1146,7 +1239,7 @@ var MFS = Local.extend('behaviors.MFS', {
             rowY >= 0 && // the row must be a row with data
             rowY < this.getAllDataCount() && // the row must not be a total row or row without data
             (this.getColumns()[dataX].data === "true" ||
-                this.getDataModel().getComponent().getDataSource().getValue(dataX, rowY)) && // The button is showed
+                this.dataModel.source.getValue(dataX, rowY)) && // The button is showed
             (!this.isSubmitting()) && // the record is not under submitting 
             this.getMagicValue(this.getDataItem(rowY), this.getColumns()[dataX].enabled.substring(1))
         ) {
@@ -1160,14 +1253,14 @@ var MFS = Local.extend('behaviors.MFS', {
     /**
      * click handler for all click events on an existing row on hypergrid.
      *
-     * @method exisitngRowOnTapHandler
+     * @method exisitngRowOnClickHandler
      * @return {bool} Returns True is processed by this handler; false otherwise
      * @param {object} grid The fin-hypergrid
      * @param {object} event A click event defined in fin-hypergrid
      * @param {int} index of the column
      * @param {int} index of the row. It might be different form dataY due to there might be subitems expanded.
      */
-    existingRowOnTapHandler: function (grid, event, dataX, rowY) {
+    existingRowOnClickHandler: function (grid, event, dataX, rowY) {
         "use strict";
         if (event.gridCell.x !== 0 && // Not Row Number
             event.gridCell.y !== 0 && // Not Header row
@@ -1186,23 +1279,23 @@ var MFS = Local.extend('behaviors.MFS', {
     /**
      * click handler for all click events on a new row on hypergrid.
      *
-     * @method newRowOnTapHandler
+     * @method newRowOnClickHandler
      * @return {bool} Returns True is processed by this handler; false otherwise
      * @param {object} grid The fin-hypergrid
      * @param {object} event A click event defined in fin-hypergrid
      * @param {int} index of the column
      * @param {int} index of the row. It might be different form dataY due to there might be subitems expanded.
      */
-    newRowOnTapHandler: function (grid, event, dataX, rowY) {
+    newRowOnClickHandler: function (grid, event, dataX, rowY) {
         "use strict";
         if (rowY >= this.getExpandedDataRowCount() &&
             this.enableNewRowEntry()) { // Ensure there is a form attached to the view                
             // A non-existing new row is clicked
             if (rowY === this.getExpandedAllRowCount(true)) {
-                return this.createNewRowOnTapHandler(grid, event);
+                return this.createNewRowOnClickHandler(grid, event);
             } else {
                 // This is an existing new row
-                return this.existingNewRowOnTapHandler(grid, event, dataX, rowY);
+                return this.existingNewRowOnClickHandler(grid, event, dataX, rowY);
             }
         } else {
             return false;
@@ -1223,14 +1316,19 @@ var MFS = Local.extend('behaviors.MFS', {
     /**
     * click handler for all click events on filter row on hypergrid.
     *
-    * @method filterRowOnTapHandler
+    * @method filterRowOnClickHandler
     * @return {bool} Returns True is processed by this handler; false otherwise
     * @param {object} grid The fin-hypergrid
     * @param {object} event A click event defined in fin-hypergrid
     * @param {int} index of the row. It might be different form dataY due to there might be subitems expanded.
     */
-    filterRowOnTapHandler: function (grid, event) {
+    filterRowOnClickHandler: function (grid, event) {
         "use strict";
+        return false;
+        // Handled by features/Filter.js
+        // Except event.Cell.x === -1
+        // in which case we clear all the filters
+        /*
         if (event.gridCell.x !== 0 &&
             event.gridCell.y === 1) {
             grid._activateEditor(event);
@@ -1238,11 +1336,12 @@ var MFS = Local.extend('behaviors.MFS', {
         } else {
             return false;
         }
+        */
     },
     // [MFS]
     getCursorAt: function (columnX, rawY) {
         "use strict";
-        // Do something similar to onTap 
+        // Do something similar to onClick
         var rowY = rawY - this.getHeaderRowCount();
         var dataX = columnX;
         var dataY = rowY;
@@ -1254,7 +1353,7 @@ var MFS = Local.extend('behaviors.MFS', {
             // Is the clicked cell a control button?
             if (this.getColumns()[dataX].control && // column must be a control button
                 (this.getColumns()[dataX].data === "true" ||
-                    this.getDataModel().getComponent().getDataSource().getValue(dataX, rowY)) // The button is showed
+                    this.dataModel.source.getValue(dataX, rowY)) // The button is showed
             ) {
                 return "pointer";
             }
@@ -1484,12 +1583,12 @@ var MFS = Local.extend('behaviors.MFS', {
     /**
     * click handler for all click events for creating a new row on hypergrid.
     *
-    * @method createNewRowOnTapHandler
+    * @method createNewRowOnClickHandler
     * @return {bool} Returns True is processed by this handler; false otherwise
     * @param {object} grid The fin-hypergrid
     * @param {object} event A click event defined in fin-hypergrid
     */
-    createNewRowOnTapHandler: function (grid, event) {
+    createNewRowOnClickHandler: function (grid, event) {
         "use strict";
         if (event.primitiveEvent.detail.primitiveEvent.ctrlKey) {
             if (this.getNewDataCount() > 0) {
@@ -1585,14 +1684,14 @@ var MFS = Local.extend('behaviors.MFS', {
     /**
     * click handler for all click events on an existing new row on hypergrid.
     *
-    * @method newRowOnTapHandler
+    * @method newRowOnClickHandler
     * @return {bool} Returns True is processed by this handler; false otherwise
     * @param {object} grid The fin-hypergrid
     * @param {object} event A click event defined in fin-hypergrid
     * @param {int} index of the column
     * @param {int} index of the row. It might be different form dataY due to there might be subitems expanded.
     */
-    existingNewRowOnTapHandler: function (grid, event, dataX, rowY) {
+    existingNewRowOnClickHandler: function (grid, event, dataX, rowY) {
         "use strict";
         if (!this.getColumns()[dataX].leafAggregateFunction || this.isLeafRow(rowY)) {
             grid._activateEditor(event);
@@ -1618,7 +1717,7 @@ var MFS = Local.extend('behaviors.MFS', {
     /**
          * Key down handler for all key down events on hypergrid.
          *
-         * @method onTap
+         * @method onKeyDown
          * @return {object} Returns Nothing
          * @param {object} grid The fin-hypergrid
          * @param {object} event A key down event defined in fin-hypergrid
@@ -1971,6 +2070,20 @@ var MFS = Local.extend('behaviors.MFS', {
     getSortImageForColumn: function(index) {
         const sortIndex = this.tableState.sorted[index] || 0;
         return this.sortStates[sortIndex];
+    },
+
+    getNewDataModel: function (options) {
+        return new DataModelMfs(this.grid, options);
+    },
+
+    // [MFS]
+    setTableState(state) {
+        this.tableState = state;
+    },
+
+    // [MFS]
+    getTableState() {
+        return this.tableState;
     }
 });
 

@@ -17,7 +17,7 @@ HeaderRow.prototype = {
 
     getValue: function(x, y) {
         var column = this.behavior.getColumn(x),
-            result = column.header || column.name, // uses field name when header undefined
+            result = column.header,
             sortString = this.behavior.dataModel.getSortImageForColumn(x),
             groups;
 

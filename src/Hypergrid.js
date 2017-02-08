@@ -21,6 +21,9 @@ var CellRenderers = require('./cellRenderers');
 var CellEditors = require('./cellEditors');
 var BehaviorJSON = require('./behaviors/JSON');
 
+// [MFS]
+var OperationQueue = require('./lib/OperationQueue');
+
 var themeInitialized = false,
     gridTheme = Object.create(defaults),
     globalProperties = Object.create(gridTheme);
@@ -147,6 +150,8 @@ var Hypergrid = Base.extend('Hypergrid', {
             "bubbles": true,
             "cancelable": true
         });
+
+        this.div.dispatchEvent(event);
     },
 
     terminate: function() {
@@ -1069,7 +1074,12 @@ var Hypergrid = Base.extend('Hypergrid', {
             divCanvas = this.divCanvas = document.createElement('div'),
             style = divCanvas.style;
 
-        style.position = 'absolute';
+        // [MFS]
+        divCanvas.classList.add('div-canvas');
+        // Make it static instead of absolute so it can inflate the parent
+        // style.position = 'absolute';
+        style.position = 'static';
+
         style.top = margin.top || 0;
         style.right = margin.right || 0;
         style.bottom = margin.bottom || 0;
@@ -2943,6 +2953,22 @@ var Hypergrid = Base.extend('Hypergrid', {
         var dontClearRows = this.isCheckboxOnlyRowSelections();
         this.selectionModel.clear(dontClearRows);
         this.selectionModel.select(x, y, 0, 0, silent);
+    },
+
+    // [MFS] this function was removed
+    toggleSort: function (x, keys) {
+        this.stopEditing();
+        this.behavior.dataModel.toggleSort(x, keys);
+        var self = this;
+
+        setTimeout(function () {
+            self.synchronizeScrollingBoundaries();
+            //self.behaviorChanged();
+            if (self.isColumnAutosizing()) {
+                self.behavior.autosizeAllColumns();
+            }
+            self.repaint();
+        }, 10);
     },
 
     toggleSelectColumn: function(x, keys) {

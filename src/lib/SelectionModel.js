@@ -140,6 +140,7 @@ SelectionModel.prototype = {
 
         if (!silent) {
             this.grid.selectionChanged();
+        }
         // [MFS]
         this.fire('selectionUpdated', this.selections);
     },

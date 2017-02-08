@@ -172,8 +172,8 @@ var CellEditor = Base.extend('CellEditor', {
             return;
         }
 
-        if (this.acquireDataWriteLock && !this.realBeginEditAt) {
-            console.warn("realBeginEditAt not defined.");
+        if (this.acquireDataWriteLock && !this.realBeginEditing) {
+            console.warn("realBeginEditing not defined.");
             return;
         }
 

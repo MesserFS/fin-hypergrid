@@ -5,7 +5,6 @@ module.exports = (() => {
     class OperationQueue {
         constructor() {
             this.lastPromise = new Promise((resolve, reject) => {
-                console.log("p1");
                 window.setTimeout(() => {
                     resolve(null);
                 }, 0);
@@ -13,7 +12,7 @@ module.exports = (() => {
         }
 
         addPromiseFunction(fn) {
-            // Cannot use arrow function in roder to 
+            // Cannot use arrow function in order to 
             this.lastPromise = this.lastPromise.then(fn);
             return this.lastPromise;
         }

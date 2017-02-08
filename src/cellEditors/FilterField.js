@@ -26,31 +26,26 @@ const FilterField = TextField.extend('FilterField', {
      */
     alias: 'filterfield',
 
-    realBeginEditAt: function (point) {
+    realBeginEditing: function (point) {
         if (!this.isAdded) {
             this.isAdded = true;
             this.attachEditor();
         }
 
-        this.setEditorPoint(point);
-        const model = this.grid.behavior;
-        const value = model.getFilterValue(point.x);
-        const proceed = this.grid.fireBeforeCellEdit(point, value);
-        if (!proceed) {
-            //we were cancelled
-            return;
+        if (this.grid.fireRequestCellEdit(this.event.gridCell, this.initialValue)) {
+            this.checkEditorPositionFlag = true;
+            this.checkEditor();
         }
-        this.initialValue = value;
-        this.setEditorValue(value);
-        this.isEditing = true;
-        this.setCheckEditorPositionFlag();
-        this.checkEditor();
     },
-    saveEditorValue: function () {
-        const model = this.grid.behavior;
-        const point = this.getEditorPoint();
-        const value = this.getEditorValue();
-        model._updateLocalFilter(point.x, value);
+    saveEditorValue: function (value) {
+        const save = !(value && value === this.initialValue) && // data changed
+        this.grid.fireBeforeCellEdit(this.event.gridCell, this.initialValue, value, this); // proceed
+
+        if (save) {
+            this.grid.behavior._updateLocalFilter(this.event.gridCell.x, value);
+            this.grid.fireAfterCellEdit(this.event.gridCell, this.initialValue, value, this);
+        }
+        
     }
 });
 
