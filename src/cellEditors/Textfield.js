@@ -14,8 +14,9 @@ var Textfield = CellEditor.extend('Textfield', {
 
     template: '<input type="text" lang="{{locale}}" class="hypergrid-textfield" style="{{style}}">',
 
-    initialize: function() {
-        this.input.style.textAlign = this.event.getCellProperty('halign');
+    initialize: function () {
+        // [MFS]
+        // this.input.style.textAlign = this.event.getCellProperty('halign');
     },
 
     localizer: Localization.prototype.string,

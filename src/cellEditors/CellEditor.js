@@ -157,14 +157,38 @@ var CellEditor = Base.extend('CellEditor', {
         this.setBounds(cellBounds);
     },
 
+    // [MFS]
     beginEditing: function() {
+        /*
         if (this.grid.fireRequestCellEdit(this.event.gridCell, this.initialValue)) {
             this.checkEditorPositionFlag = true;
             this.checkEditor();
         }
+        */
+
+        //// [MFS] Only exeucte when DataWriteLock is acquired
+        if (this.acquireDataWriteLock && !this.acquireDataWriteLock()) {
+            console.warn("Cannot acquire DataWriteLock.");
+            return;
+        }
+
+        if (this.acquireDataWriteLock && !this.realBeginEditing) {
+            console.warn("realBeginEditing not defined.");
+            return;
+        }
+
+        this.grid.addPromiseFunction(this.realBeginEditing.bind(this));
     },
     beginEditAt: function(Constructor, name) {
         return this.deprecated('beginEditAt(point)', 'beginEditing()', '1.0.6');
+    },
+
+    // [MFS]
+    realBeginEditing: function() {
+        if (this.grid.fireRequestCellEdit(this.event.gridCell, this.initialValue)) {
+            this.checkEditorPositionFlag = true;
+            this.checkEditor();
+        }
     },
 
     /**
@@ -249,6 +273,9 @@ var CellEditor = Base.extend('CellEditor', {
         } else { // invalid but no feedback
             this.cancelEditing();
         }
+
+        //// [MFS] Release DataWriteLock (Release no matter what)
+        this.releaseDataWriteLock && this.releaseDataWriteLock();
 
         return !error;
     },
@@ -446,6 +473,11 @@ var CellEditor = Base.extend('CellEditor', {
                 this.hideEditor();
             }
         }
+
+        // [MFS]
+        return new Promise((resolve, reject) => {
+            resolve(null);
+        });
     },
 
     attachEditor: function() {

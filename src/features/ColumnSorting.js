@@ -14,16 +14,21 @@ var ColumnSorting = Feature.extend('ColumnSorting', {
      * @param {Object} event - the event details
      */
 
-    handleDoubleClick: function(grid, event) {
+    // [MFS] handleDoubleClick => handleClick
+    handleClick: function(grid, event) {
         var columnProperties;
         if (
             event.isHeaderCell &&
             (columnProperties = grid.behavior.getColumnProperties(event.gridCell.x)) &&
             !columnProperties.unsortable
         ) {
-            grid.fireSyntheticColumnSortEvent(event.gridCell.x, event.primitiveEvent.detail.keys);
+            // [MFS] this will use hypersort
+            // grid.fireSyntheticColumnSortEvent(event.gridCell.x, event.primitiveEvent.detail.keys);
+            const gridCell = event.gridCell;
+            const keys = event.primitiveEvent.detail.keys;
+            grid.toggleSort(gridCell.x, keys);
         } else if (this.next) {
-            this.next.handleDoubleClick(grid, event);
+            this.next.handleClick(grid, event);
         }
     },
 

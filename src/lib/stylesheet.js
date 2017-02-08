@@ -4,6 +4,7 @@
 
 var automat = require('automat');
 
+// For Windows (originally ../../css)
 var css = require('../../css');
 
 // note the position of the  first "natural" stylesheet. We will insert our stylesheets before this node.

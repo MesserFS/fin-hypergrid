@@ -1,6 +1,9 @@
+﻿/// <binding BeforeBuild='build' />
+/* global Buffer, require */
 'use strict';
 
-var gulp        = require('gulp'),
+const gulp = require('gulp'),
+    chmod = require('gulp-chmod'),
     $$          = require('gulp-load-plugins')(),
     runSequence = require('run-sequence'),
     browserSync = require('browser-sync').create(),
@@ -8,51 +11,63 @@ var gulp        = require('gulp'),
     path        = require('path'),
     pipe        = require('multipipe');
 
-var name        = 'fin-hypergrid',
-    srcDir      = './src/',
-    testDir     = './test/',
-    jsFiles     = '**/*.js',
-    addOnsDir   = './add-ons/',
-    demoDir     = './demo/',
-    buildDir    = demoDir + 'build/';
 
+const sass   = require('gulp-sass'),
+    using    = require('gulp-using'),
+    glob     = require("glob"),
+    merge    = require("merge-stream"),
+    through2 = require("through2");
+
+const finHypergridCurrDir = './Scripts/src/fin-hypergrid/2.0/',
+    finHypergridSrcDir    = finHypergridCurrDir + '/src/',
+    finHypergridJsFiles   = finHypergridCurrDir + '**/*.js',
+    finHypergridBuildDir  = './Scripts/core/DataView/fin-hypergrid/2.0/';
+
+const mfsHypergridCurrDir = './Scripts/src/mfs-hypergrid/2.0/',
+    mfsHypergridSrcDir    = mfsHypergridCurrDir + '/src/',
+    mfsHypergridJsFiles   = mfsHypergridCurrDir + '**/*.js',
+    mfsHypergridBuildDir  = './Scripts/core/DataView/fin-hypergrid/2.0/';
+
+
+const name = 'fin-hypergrid',
+    srcDir = './src/',
+    testDir = './test/',
+    jsFiles = '**/*.js',
+    addOnsDir = './add-ons/';
 //  //  //  //  //  //  //  //  //  //  //  //
+gulp.task('unlock', unlock);
 
 gulp.task('lint', lint);
 gulp.task('test', test);
 gulp.task('doc', doc);
 gulp.task('beautify', beautify);
 gulp.task('images', swallowImages);
-gulp.task('browserify', browserify.bind(null,
-    name,
-    srcDir,
-    buildDir
-));
+gulp.task('browserify', browserify);
 gulp.task('browserify-hyperfilter', browserify.bind(null,
     'hyper-filter',
-    addOnsDir + 'hyper-filter/',
-    buildDir + addOnsDir,
+    finHypergridCurrDir + addOnsDir + 'hyper-filter/',
+    finHypergridBuildDir + addOnsDir,
     /\w+\.exports(\s*=)/,
     'window.fin.Hypergrid.Hyperfilter$1'
 ));
 gulp.task('browserify-hypersorter', browserify.bind(null,
     'hyper-sorter',
-    addOnsDir + 'hyper-sorter/',
-    buildDir + addOnsDir,
+    finHypergridCurrDir + addOnsDir + 'hyper-sorter/',
+    finHypergridBuildDir + addOnsDir,
     /\w+\.exports(\s*=)/,
     'window.fin.Hypergrid.Hypersorter$1'
 ));
 gulp.task('browserify-totals-toolkit', browserify.bind(null,
     'totals-toolkit',
-    addOnsDir + 'totals-toolkit/',
-    buildDir + addOnsDir,
+    finHypergridCurrDir + addOnsDir + 'totals-toolkit/',
+    finHypergridBuildDir + addOnsDir,
     /\w+\.exports(\s*=)/,
     'window.fin.Hypergrid.totalsToolkit$1'
 ));
-gulp.task('reloadBrowsers', reloadBrowsers);
-gulp.task('serve', browserSyncLaunchServer);
+
 gulp.task('add-ons', addOns);
 
+gulp.task('sass', sass_task);
 gulp.task('html-templates', function() {
     return templates('html');
 });
@@ -65,11 +80,13 @@ gulp.task('build', function(callback) {
     clearBashScreen();
     runSequence(
         'lint',
+        'unlock',
         'images',
         'html-templates',
         'css-templates',
         'test',
         'add-ons',
+        'sass',
         'browserify-hyperfilter',
         'browserify-hypersorter',
         'browserify-totals-toolkit',
@@ -83,43 +100,39 @@ gulp.task('build', function(callback) {
 gulp.task('watch', function () {
     gulp.watch([
         addOnsDir + jsFiles,
-        srcDir + '**',
-        '!' + srcDir + 'jsdoc/**',
-        './css/*.css',
-        './html/*.html',
-        demoDir + 'js/*.js',
-        testDir + '**',
+        finHypergridCurrDir + srcDir + '**',
+        '!' + finHypergridCurrDir + srcDir + 'jsdoc/**',
+        finHypergridCurrDir + './css/*.css',
+        finHypergridCurrDir + './html/*.html',
+        finHypergridCurrDir + testDir + '**',
         //'../../filter-tree/src/**' // comment off this line and the one below when filter tree on npm
     ], [
         'build'
     ]);
-
-    gulp.watch([
-        demoDir + '*.html',
-        demoDir + 'css/demo.css',
-        buildDir + '*'
-    ], [
-        'reloadBrowsers'
-    ]);
 });
 
-gulp.task('default', ['build', 'watch'], browserSyncLaunchServer);
+gulp.task('default', ['build'], browserSyncLaunchServer);
 
 //  //  //  //  //  //  //  //  //  //  //  //
 
 function lint() {
     return gulp.src([
-        addOnsDir + jsFiles,
-        srcDir + jsFiles,
-        '!' + srcDir + '**/old/**/',
-        demoDir + 'js/*.js',
-        testDir + jsFiles,
+        finHypergridJsFiles,
+        mfsHypergridJsFiles,
+        '!' + finHypergridSrcDir + '**/old/**/',
+        finHypergridCurrDir + addOnsDir + jsFiles,
+        finHypergridCurrDir + srcDir + jsFiles,
+        finHypergridCurrDir + testDir + jsFiles
         //'../../filter-tree/src/' + jsFiles // comment off this line and the one above when filter tree on npm
     ])
-        .pipe($$.excludeGitignore())
-        .pipe($$.eslint())
+        .pipe($$.eslint()) // specify version in .eslintrc.json
         .pipe($$.eslint.format())
         .pipe($$.eslint.failAfterError());
+}
+
+function unlock() {
+    require("child_process").exec("attrib -R " + finHypergridCurrDir + 'images/images.js');
+    require("child_process").exec("attrib -R " + finHypergridBuildDir + "*.js /s");
 }
 
 function test(cb) {
@@ -128,31 +141,74 @@ function test(cb) {
 }
 
 function beautify() {
-    return gulp.src([srcDir + jsFiles, testDir + jsFiles])
+    return gulp.src(finHypergridJsFiles)
         .pipe($$.beautify()) //apparent bug: presence of a .jsbeautifyrc file seems to force all options to their defaults (except space_after_anon_function which is forced to true) so I deleted the file. Any needed options can be included here.
-        .pipe(gulp.dest(srcDir));
+        .pipe(gulp.dest(finHypergridSrcDir));
 }
 
-function browserify(name, srcDir, buildDir, a, b) {
-    return gulp.src(srcDir + 'index.js')
+function sass_task() {
+    var themesPath = "./Sass/ThemeVariables/";
+        
+    const theme_tasks = glob("./Sass/ThemeVariables/*.scss", function (er, files) {
+        files.map(filename => path.basename(filename, '.scss')).forEach((themeName) => {
+            gulp.src("./Sass/Common/**/*.scss")
+                .pipe(through2.obj(function (file, enc, next) {
+                    const themedFile = file.clone();                    
+                    themedFile.contents = Buffer.concat([new Buffer(`$current-theme-name: "${themeName}"; @import '${path.join(themesPath, themeName + ".scss").replace(/\\/g, "/")}'; `), themedFile.contents]);
+                    themedFile.path = path.join("./Sass/Common/" + themeName, path.relative("Sass/Common", themedFile.path));
+                    this.push(themedFile);
+                    next();
+                }))
+                .pipe(sass())
+                .pipe(through2.obj(function (file, enc, next) {
+                    this.push(file);
+                    next();
+                }))
+                .pipe(gulp.dest("./Content/themes/"));
+        });
+    });
+
+    const color_task = gulp.src(["./Sass/Color/normal.scss", "./Sass/Color/outline.scss"])
+        .pipe(sass())
+        .pipe(gulp.dest("./Content/custom-color/"));
+    return;
+}
+
+function browserify() {
+    const browserifyConfigurations = [
+        {
+            "srcFile": finHypergridSrcDir + 'index.js',
+            "renameFileName": 'fin-hypergrid-mfs',
+            "destDir": finHypergridBuildDir,
+            "paths": ['./node_modules']
+        },
+        {
+            "srcFile": mfsHypergridSrcDir + 'index.js',
+            "renameFileName": 'mfs-realtime-hypergrid',
+            "destDir": mfsHypergridBuildDir,
+            "paths": ['./node_modules']
+        }
+    ];
+    browserifyConfigurations.forEach(config => {
+        gulp.src(config.srcFile)
         .pipe(
             $$.mirror(
                 pipe(
-                    $$.rename(name + '.js'),
+                    $$.rename(config.renameFileName + '.js'),
                     $$.browserify({ debug: true })
-                        .on('error', $$.util.log),
-                    $$.replace(a, b)
+                        .on('error', $$.util.log)
                 ),
                 pipe(
-                    $$.rename(name + '.min.js'),
-                    $$.browserify(),
-                    $$.uglify()
-                        .on('error', $$.util.log),
-                    $$.replace(a, b)
+                    $$.rename(config.renameFileName + '.min.js'),
+                    $$.browserify() /* ,
+                    $$.uglify() */ // Disabled until uglify officially supports ES6
+                        .on('error', $$.util.log)
                 )
             )
         )
-        .pipe(gulp.dest(buildDir));
+        .pipe(gulp.dest(config.destDir));
+    });
+    
 }
 
 function doc(cb) {
@@ -167,7 +223,7 @@ function browserSyncLaunchServer() {
     browserSync.init({
         server: {
             // Serve up our build folder
-            baseDir: demoDir
+            baseDir: finHypergridBuildDir
         },
         port: 9000
     });
@@ -178,14 +234,14 @@ function reloadBrowsers() {
 }
 
 function clearBashScreen() {
-    var ESC = '\x1B';
+    const ESC = '\x1B';
     console.log(ESC + 'c'); // (VT-100 escape sequence)
 }
 
 function swallowImages() {
-    var config = {
+    const config = {
         src: {
-            globs: [ 'images/*.png', 'images/*.gif','images/*.jpeg', 'images/*.jpg' ],
+            globs: [finHypergridCurrDir + 'images/*.png', finHypergridCurrDir + 'images/*.gif', finHypergridCurrDir + 'images/*.jpeg', finHypergridCurrDir + 'images/*.jpg'],
             options: {}
         },
         transform: {
@@ -194,7 +250,7 @@ function swallowImages() {
             footer: ''
         },
         dest: {
-            path: 'images',
+            path: finHypergridCurrDir + 'images',
             filename: 'images.js',
             header: 'module.exports = { // This file generated by gulp-imagine-64 at '
             + (new Date).toLocaleTimeString() + ' on '
@@ -215,8 +271,8 @@ function swallowImages() {
 }
 
 function templates(folder) {
-    return gulp.src('./' + folder + '/*.' + folder)
-        .pipe($$.each(function(content, file, callback) {
+    return gulp.src(finHypergridCurrDir + folder + '/*.' + folder)
+        .pipe($$.each(function (content, file, callback) {
             var filename = path.basename(file.path, "." + folder),
                 member = /[^\w]/.test(filename) ? "['" + filename + "']" : "." + filename;
 
@@ -230,7 +286,7 @@ function templates(folder) {
             content = 'exports' + member + " = [\n'" + content
                     .replace(/\\/g, "\\\\") // escape all backslashes
                     .replace(/'/g, "\\'") // escape all single-quotes
-                    .replace(/\n/g, "',\n'") + "'\n].join('\\n');\n";
+                    .replace(/\r\n/g, "',\n'") + "'\n].join('\\n');\n";
 
             // remove possible blank line at end of each
             content = content.replace(/,\n''\n]/g, "\n]");
@@ -239,14 +295,16 @@ function templates(folder) {
         }))
         .pipe($$.concat("index.js"))
         .pipe($$.header("'use strict';\n\n"))
-        .pipe(gulp.dest(function(file) { return file.base; }));
+        .pipe(gulp.dest(function (file) {
+            return file.base;
+        }));
 }
 
 function addOns() {
-    return gulp.src(addOnsDir + '*.js')
+    return gulp.src(finHypergridCurrDir + addOnsDir + '*.js')
     // Insert an IIFE around the code...
         .pipe($$.replace( // ...starting immediately following 'use strict' and...
-            "'use strict';\n",
+            "'use strict';",
             "'use strict';\n(function() {"
         ))
         .pipe($$.replace( // ...ending after modules.exports.
@@ -257,17 +315,16 @@ function addOns() {
             $$.mirror(
                 pipe(
                     $$.rename(function (path) {
-                        path.basename = addOnsDir + path.basename;
                     })
                 ),
                 pipe(
                     $$.rename(function (path) {
-                        path.basename = addOnsDir + path.basename + '.min';
+                        path.basename = path.basename + '.min';
                     }),
                     $$.uglify() // minimize
                         .on('error', $$.util.log)
                 )
             )
         )
-        .pipe(gulp.dest(buildDir));
+        .pipe(gulp.dest(finHypergridBuildDir));
 }

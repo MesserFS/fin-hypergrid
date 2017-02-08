@@ -5,5 +5,7 @@ module.exports = {
     JSON: require('./JSON'),
     HeaderSubgrid: require('./HeaderSubgrid'),
     FilterSubgrid: require('./FilterSubgrid'),
-    SummarySubgrid: require('./SummarySubgrid')
+    SummarySubgrid: require('./SummarySubgrid'),
+    MFSDatamodel: require('./MFS/mfsDataModel'),
+    MFSFilterSubgrid: require('./MFS/mfsFilterSubgrid')
 };

@@ -32,6 +32,9 @@ function Column(behavior, options) {
     this.behavior = behavior;
     this.dataModel = behavior.dataModel;
 
+    //[MFS]
+    this.clearObjectProperties = behavior.clearObjectProperties;
+
     schema = this.behavior.dataModel.schema;
 
     switch (typeof options) {
@@ -257,7 +260,14 @@ Column.prototype = {
         var typeOf = typeof something;
         switch (typeOf) {
             case 'object':
-                return something.constructor.name.toLowerCase();
+                // [MFS]
+                if (something === null || something === undefined) {
+                    return "textfield";
+                } else {
+                    return something.constructor.name.toLowerCase();
+                }
+            case 'string':
+                return "textfield";
             case 'number':
                 return parseInt(something) === something ? 'int' : 'float';
             default:

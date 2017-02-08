@@ -141,6 +141,8 @@ SelectionModel.prototype = {
         if (!silent) {
             this.grid.selectionChanged();
         }
+        // [MFS]
+        this.fire('selectionUpdated', this.selections);
     },
 
     /**
@@ -561,6 +563,19 @@ SelectionModel.prototype = {
             y <= maxY;
 
         return result;
+    },
+
+    // This function was originally available in polymer,
+    // but not difficult to implement anyway.
+    // We don't have a DOM element for behavior,
+    // but using div.fin-hypergrid should be sufficient.
+    // Notice bubbles is by default false.
+    fire: function (eventName, eventParameters) {
+        this.grid.div.dispatchEvent(new CustomEvent(eventName,
+        {
+            detail: eventParameters,
+            bubbles: true
+        }));
     }
 };
 

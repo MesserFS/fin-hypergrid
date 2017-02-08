@@ -934,8 +934,17 @@ var Renderer = Base.extend('Renderer', {
 
             cellProperties = behavior.getCellOwnProperties(cellEvent),
             baseProperties,
-            nonGridCellProps,
-            config = this.config;
+            nonGridCellProps;
+            // [MFS]
+            // Always reset backgroundColor (this.config is used for caching if configType is the same)
+            if (this.config) {
+                delete this.config.backgroundColor;
+            }
+            
+            var config = this.config;
+
+            
+            
 
         if (cellProperties && cellProperties.applyCellProperties) {
             this.c = undefined;
@@ -1000,6 +1009,11 @@ var Renderer = Base.extend('Renderer', {
             isSelected = grid.isCellSelectedInColumn(x);
         }
 
+        // [MFS]
+        // var headerRowCount = this.getHeaderRowCount();
+        // var rowNum = r - headerRowCount;
+        var rowNum = r; // since the latest Hypergrid is grid base, subtracting headerRowCount will doubleCount header and filterSubGrid
+
         // Set cell contents:
         // * For all cells: set `config.value` (writable property)
         // * For cells outside of row handle column: also set `config.dataRow` for use by valOrFunc
@@ -1007,14 +1021,20 @@ var Renderer = Base.extend('Renderer', {
             config.dataRow = grid.getRow(r);
             config.value = cellEvent.value;
         } else if (isGridRow) {
+            var rowNumDisplay = this.grid.behavior.getFixedColumnValue(0, rowNum);
             // row handle for a data row
-            config.value = [images.checkbox(isRowSelected), r + 1, null]; // row number is 1-based
+            // [MFS] Disable checkbox until implemented
+            // config.value = [images.checkbox(isRowSelected), r + 1, null]; // row number is 1-based
+            config.value = [null, rowNumDisplay, null]; // row number is 1-based
         } else if (isHeaderRow) {
             // row handle for header row: gets "master" checkbox
-            config.value = [images.checkbox(grid.areAllRowsSelected()), '', null];
+            // [MFS] Disable checkbox until implemented
+            // config.value = [images.checkbox(grid.areAllRowsSelected()), '', null];
+            config.value = [null, '', null];
         } else if (isFilterRow) {
             // row handle for filter row: gets filter icon
-            config.value = [images.filter(false), '', null];
+            const on = this.grid.behavior.filterExists();
+            config.value = [images.filter(on), '', null];
         } else {
             // row handles for "summary" or other rows: empty
             config.value = '';
